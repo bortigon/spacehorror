@@ -157,7 +157,7 @@ Pick one in **Screen ends with**:
     until they reach that room. "(no walking)" = straight on after the last tip.
   * **Walk prompt** — shown in the map's info line while they walk (e.g. "Please proceed to the READY ROOM.").
   * **On arrival (ops)** — state ops (comma-separated) run on the still-open map when they arrive,
-    e.g. `map_restrict_room:stbd_hold` pops a RESTRICTED stamp over that room. The map then stays
+    e.g. `map_restrict_room:stbd_hold` pops a RESTRICTED stamp over that room (the ready room no longer uses it: the stamp appears when the player clicks that room's lock). The map then stays
     open a little longer (2.4 s instead of 0.9 s) so the player sees it.
   * **Then goes to** — where the game goes once they arrive (usually Next screen).
   Walkthroughs are tutorials: no pinned response afterwards. Dev back steps through the tips.
@@ -276,6 +276,48 @@ Field by field:
 | choice `if` | only show the choice when a flag is set: `"brave"`, `"!brave"`, `"a,b"` |
 | screen `on_enter` | (hand-edit only) list of ops run when the screen opens, e.g. `["set_flag:saw_bay"]`. Map / state ops: `map_set_room:id`, `map_explore:id`, `map_know_room:id` (name shown, still dark), `map_know_door:a\|b`, `map_unlock_door:a\|b`, `map_lock_door:a\|b`, `map_moves:on\|off`, `map_restrict_room:id` / `map_unrestrict_room:id`, `o2_full` |
 | walkthrough `on_arrive` | ops run when the player reaches `move_to` (same ops as `on_enter`), e.g. `["map_restrict_room:stbd_hold"]` |
+
+### Acts: functions and containers
+
+A screen's `acts` is a dictionary keyed by the id in `[act=id]word[/act]`. Two kinds:
+
+```json
+"acts": {
+  "bag": {
+    "text": "A bag of chips.",
+    "choices": [{"label": "Take bag of chips?", "hours": 1, "item": "chips", "detail": "", "required": false}]
+  },
+  "locker": {
+    "container": true,
+    "title": "LOCKER",
+    "text": "description lines shown under the title",
+    "grid": {"cols": 3, "rows": 3},
+    "items": [
+      {"id": "suit", "label": "SUIT", "hours": 1, "required": false, "detail": "Pressure suit. Putting it on takes 1 hr.", "actions": ["take"]},
+      {"id": "lantern", "label": "LANTERN", "hours": 1, "required": false, "detail": "Light.", "actions": ["take"]},
+      {"id": "airlock_keycard", "label": "AIRLOCK KEYCARD", "hours": 1, "required": false, "detail": "Opens the airlock door.", "actions": ["take"]}
+    ],
+    "marker": {"room": "ready_room", "label": "LOCKER", "rect": [0.03, 0.05, 0.24, 0.17]}
+  },
+  "coffee": {
+    "station": "coffee",
+    "title": "COFFEE POT",
+    "text": "A coffee pot sits on the counter beside the locker.",
+    "marker": {"room": "ready_room", "label": "COFFEE POT", "rect": [0.63, 0.05, 0.34, 0.17]}
+  }
+}
+```
+
+- No `container` key: a **function**. Clicking the word replaces the screen text with `text` and shows `choices` plus an automatic Back that returns to the caller's text.
+- `"container": true`: a **window**. `ui/container_window.gd` opens centred, with the character screen (`ui/character_screen.gd`) beside it. `title` is top-left, `text` is the description under it (the left column, about 40 % of the window, no scroll bar: the font shrinks to fit), the rest is a `cols` x `rows` grid (1–8 each) of the `items`, filled in order (an item may pin a cell with `"slot": n`, 0-based). There is no Back: EXIT / Esc closes it.
+- Item: `id` (inventory id; Take sets the flag `has_<id>`, which `require` and the lantern light check), `label` (cell name, description, button `Take LABEL (1 hr)`), `hours` (shown on the button and really spent from the 8 hour blocks; refused with a short message when too few are left. Blocks are live once a screen runs `arm_hours`, as the ready room does), `required`, `detail` (description + hover tip), `actions` (default `["take"]`). `take` is the only built-in action. Others (`use`, `inspect`, or any name) get a button `Use LABEL` and emit `action_requested` on the container window, so they can be handled later without changing the data.
+- An old container written with `choices` instead of `items` still loads (one item per choice). Without a window (the Scene Writer preview) a container reads as the function form.
+- `"marker": {"room", "label", "rect": [x, y, w, h]}` on an act adds a green labelled rectangle to that room on the minimap and full map (rect = fractions of the room's bounding box). Clicking it opens the same window as the green word. Drop-item boxes use the bottom row of the room, so keep markers in the top 70 %.
+- `"station": "coffee"` (instead of `container`) is a **station**: a window of the same hologram style with a picture and code-defined options (`ui/station_window.gd`; the coffee pot is in `templates/pda_screen.gd`: `coffee_provider()` / `coffee_option()`). The Scene Writer shows it as an act it cannot edit; leave it alone. State: `vars.coffee = {pot, brews, drinks, disabled}`; `coffee_set_disabled(true)` removes the options ("MACHINE DISABLED") for a later pass.
+- A `hold` ending with `"exit": "door:ready_room|airlock"` has no CONTINUE: the scene is left by clicking that door on the map once it is open (no suit worn = a Yes / No warning first, `flags.went_without_suit`). `goto` is where it leads (`order:next`).
+- A screen with `"tutorial": "items"` runs the inventory walkthrough the first time its text finishes (`TUTORIALS` in `templates/authored_scene.gd`; flag `tut_items_done`).
+- Items, the character screen and the map: the character screen offers **Drop** for every item (free; the item sits on the room floor, shown as a green box on the map, state `vars.dropped`) and **Put on** for the suit (1 hr, fade + zipper, `vars.suit_worn`, the suit leaves the inventory, the figure turns green). Locked doors in `data/vessel.gd` take `key` (item id), `key_name` (shown as "Requires <key_name>"), `behind` (room named when opened) and `fail: "restrict"` (the RESTRICTED stamp appears when the lock is tried without the card). Opened doors are kept in `flags.door_open_<a>_<b>`.
+- Hotkeys: TAB, C or I show / hide the character screen in the game UI (the INV tab does the same). Esc closes the topmost window. Nothing on screen tells the player this.
 
 After a hand edit, open the scene in the Scene Writer and press **Build** (or just run it — the built
 `.tscn` reads the JSON every time, so text changes show up without rebuilding).

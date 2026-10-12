@@ -21,6 +21,7 @@ signal qte_tick(left: float)      # 1 → 0 while the O2 countdown runs
 signal action_taken(act_id: String, action: Dictionary)
 
 const Markup := preload("res://ui/story_markup.gd")
+const SceneData := preload("res://ui/story_scene.gd")
 
 const TEXT_COLOR := Color(0.56, 0.8, 0.6)
 const HEADING_COLOR := Color("#cfe8d4")
@@ -102,6 +103,10 @@ var _meta_click := ""
 var act_done: Dictionary = {}
 var act_is_done: Callable
 var act_hours_live := false
+## Callable(act_id: String, spec: Dictionary): the owner shows a container act as a window
+## (templates/pda_screen.gd). Without one (the Scene Writer preview) a container reads as the old
+## function: its text, one option per item, and Back.
+var container_handler: Callable
 var _act_stack: Array[String] = []
 var _in_act := false
 var _unwritten := ""
@@ -636,6 +641,9 @@ func open_act(act_id: String) -> void:
 		_render()
 		return
 	_unwritten = ""
+	if (bool(spec.get("container", false)) or spec.has("station")) and container_handler.is_valid():
+		container_handler.call(id, spec)
+		return
 	_act_stack.append(id)
 	_in_act = true
 	_begin_text(str(spec.get("text", "")))
@@ -686,6 +694,21 @@ func _screen_cps() -> float:
 
 
 func _act_spec(act_id: String) -> Dictionary:
+	var spec := _raw_act_spec(act_id)
+	if spec.has("station") and not container_handler.is_valid():
+		return {"text": str(spec.get("text", "")), "choices": []}
+	if bool(spec.get("container", false)) and not container_handler.is_valid():
+		return SceneData.container_as_function(spec)
+	return spec
+
+
+## True when the act is a container (acts with "container": true).
+func is_container(act_id: String) -> bool:
+	var spec := _raw_act_spec(act_id)
+	return bool(spec.get("container", false)) or spec.has("station")
+
+
+func _raw_act_spec(act_id: String) -> Dictionary:
 	var raw: Variant = screen.get("acts", {})
 	var id := act_id.strip_edges().to_lower()
 	if raw is Dictionary:

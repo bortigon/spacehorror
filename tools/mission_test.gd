@@ -107,7 +107,7 @@ func _run() -> void:
 	await process_frame
 	await wait_s(0.5)
 	var pda = current_scene
-	check("READY ROOM opened excursion1_prep", pda != null and str(pda.scene_file_path).ends_with("excursion1_prep.tscn"))
+	check("READY ROOM opened new_scene_2 (the outline target)", pda != null and str(pda.scene_file_path).ends_with("new_scene_2.tscn"))
 	if pda != null and pda.has_method("current_screen"):
 		check("READY ROOM landed on the ready_room subscene", str(pda.current_screen().get("id", "")) == "ready_room")
 		check("carry: callsign OPERATOR, exam done, O2 full", str(pda.vars.get("callsign", "")) == "OPERATOR"

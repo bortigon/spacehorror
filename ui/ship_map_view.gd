@@ -8,6 +8,10 @@ signal map_clicked
 signal room_hovered(room_id: String)
 ## Full map only: left click on a room (click-to-move, see PdaScreen.map_try_move).
 signal room_clicked(room_id: String)
+## A padlock (or a door the host marked clickable) was clicked. key = "a|b" (see find_door).
+signal door_clicked(key: String)
+## A map marker (LOCKER / COFFEE POT label or a dropped item) was clicked.
+signal marker_clicked(marker_id: String)
 
 @export var compact := false
 @export var show_legend := false
@@ -49,6 +53,18 @@ var _font_mono: Font
 var _xf := Transform2D.IDENTITY
 var _t := 0.0
 var _pops: Dictionary = {}   # room id → Time.get_ticks_msec() of its stamp pop
+var _unlocks: Dictionary = {}  # door key → Time.get_ticks_msec() of its unlock animation
+var hover_marker := ""
+var hover_door := ""
+
+## Lock-opening animation: the lock shakes, then pops open, fades, and the open-door graphic remains.
+const UNLOCK_SHAKE := 0.45
+const UNLOCK_TIME := 0.9
+## A padlock / marker is this much easier to hit than it is to see (px).
+const HIT_GROW := 5.0
+const COL_MARKER := Color(0.42, 0.78, 0.38, 0.97)
+const COL_MARKER_EDGE := Color(0.82, 1.0, 0.8, 1.0)
+const COL_MARKER_INK := Color(0.02, 0.12, 0.05, 1.0)
 
 
 func _ready() -> void:
@@ -65,7 +81,7 @@ func set_map(data: Dictionary) -> void:
 
 
 func _process(delta: float) -> void:
-	if is_visible_in_tree() and (str(map_data.get("current", "")) != "" or not _pops.is_empty()):
+	if is_visible_in_tree() and (str(map_data.get("current", "")) != "" or not _pops.is_empty() or not _unlocks.is_empty()):
 		_t += delta
 		queue_redraw()
 
@@ -87,9 +103,117 @@ func room_restricted(id: String) -> bool:
 	return bool(((map_data.get("rooms", {}) as Dictionary).get(id, {}) as Dictionary).get("restricted", false))
 
 
+## Starts the lock-opening animation on door "a|b" (PdaScreen.map_unlock_with_key calls this).
+func pop_unlock(key: String) -> void:
+	_unlocks[_canon_key(key)] = Time.get_ticks_msec()
+	queue_redraw()
+
+
+## Seconds since the door's unlock animation started (999 if it never ran).
+func unlock_age(key: String) -> float:
+	var k := _canon_key(key)
+	if not _unlocks.has(k):
+		return 999.0
+	return (Time.get_ticks_msec() - int(_unlocks[k])) / 1000.0
+
+
+func unlocking(key: String) -> bool:
+	return unlock_age(key) < UNLOCK_TIME
+
+
+static func door_key(d: Dictionary) -> String:
+	return "%s|%s" % [str(d.get("a", "")), str(d.get("b", ""))]
+
+
+func _canon_key(key: String) -> String:
+	var d := find_door(key)
+	return door_key(d) if not d.is_empty() else key
+
+
+## Doors that react to a click right now: locked ones, and the ones the host lists in "click_doors".
+func _door_clickable(d: Dictionary) -> bool:
+	if str(d.get("state", "open")) != "open":
+		return true
+	return door_key(d) in (map_data.get("click_doors", []) as Array)
+
+
+## Which clickable door's lock / doorway is at this local point ("" if none).
+func door_at(local_pos: Vector2) -> String:
+	if size.x <= 0.0:
+		return ""
+	for d: Dictionary in map_data.get("doors", []):
+		if not _door_visible(d) or not _door_clickable(d):
+			continue
+		if door_rect_local(door_key(d)).grow(HIT_GROW).has_point(local_pos):
+			return door_key(d)
+	return ""
+
+
+func _door_visible(d: Dictionary) -> bool:
+	var rooms: Dictionary = map_data.get("rooms", {})
+	var sa := str((rooms.get(str(d.get("a", "")), {}) as Dictionary).get("state", "unexplored"))
+	var sb := str((rooms.get(str(d.get("b", "")), {}) as Dictionary).get("state", "unexplored"))
+	return sa == "explored" or sb == "explored" or bool(d.get("always_show", false)) or bool(d.get("known", false))
+
+
+## ---- markers: small green labelled rectangles inside a room ("LOCKER", "COFFEE POT", dropped items).
+## A marker is {id, room, label, rect: [x, y, w, h] as fractions of the room's bounding box, kind}.
+func markers() -> Array:
+	var out: Array = []
+	var rooms: Dictionary = map_data.get("rooms", {})
+	for m: Variant in map_data.get("markers", []):
+		if m is Dictionary and str((rooms.get(str((m as Dictionary).get("room", "")), {}) as Dictionary).get("state", "")) == "explored":
+			out.append(m)
+	return out
+
+
+func find_marker(id: String) -> Dictionary:
+	for m: Dictionary in markers():
+		if str(m.get("id", "")) == id:
+			return m
+	return {}
+
+
+## Screen rect of a marker in this view's local coordinates (Rect2() if unknown / not visible).
+func marker_rect_local(id: String) -> Rect2:
+	var m := find_marker(id)
+	if m.is_empty() or size.x <= 0.0:
+		return Rect2()
+	_update_xform()
+	var room: Dictionary = (map_data.get("rooms", {}) as Dictionary).get(str(m.get("room", "")), {})
+	var pts := PackedVector2Array()
+	for p in room.get("poly", []):
+		pts.append(p)
+	var bb := _pts_rect(pts)
+	var f: Array = m.get("rect", [0.0, 0.0, 0.2, 0.2])
+	var tl := bb.position + Vector2(float(f[0]) * bb.size.x, float(f[1]) * bb.size.y)
+	var br := tl + Vector2(float(f[2]) * bb.size.x, float(f[3]) * bb.size.y)
+	var a := _xf * tl
+	var b := _xf * br
+	return Rect2(a, b - a)
+
+
+func marker_at(local_pos: Vector2) -> String:
+	for m: Dictionary in markers():
+		if marker_rect_local(str(m.get("id", ""))).grow(2.0).has_point(local_pos):
+			return str(m.get("id", ""))
+	return ""
+
+
+func _update_hover(pos: Vector2) -> void:
+	var mk := marker_at(pos)
+	var dk := door_at(pos) if mk == "" else ""
+	if mk != hover_marker or dk != hover_door:
+		hover_marker = mk
+		hover_door = dk
+		queue_redraw()
+
+
 func _gui_input(event: InputEvent) -> void:
 	if not interactive:
 		return
+	if event is InputEventMouseMotion:
+		_update_hover((event as InputEventMouseMotion).position)
 	if event is InputEventMouseMotion and not compact:
 		var id := room_at((event as InputEventMouseMotion).position)
 		if id != hovered_id:
@@ -99,6 +223,16 @@ func _gui_input(event: InputEvent) -> void:
 	elif event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			var mk := marker_at(mb.position)
+			if mk != "":
+				marker_clicked.emit(mk)
+				accept_event()
+				return
+			var dk := door_at(mb.position)
+			if dk != "":
+				door_clicked.emit(dk)
+				accept_event()
+				return
 			map_clicked.emit()
 			if not compact:
 				var rid := room_at(mb.position)
@@ -108,10 +242,15 @@ func _gui_input(event: InputEvent) -> void:
 
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_MOUSE_EXIT and hovered_id != "":
-		hovered_id = ""
-		room_hovered.emit("")
-		queue_redraw()
+	if what == NOTIFICATION_MOUSE_EXIT:
+		if hover_marker != "" or hover_door != "":
+			hover_marker = ""
+			hover_door = ""
+			queue_redraw()
+		if hovered_id != "":
+			hovered_id = ""
+			room_hovered.emit("")
+			queue_redraw()
 
 
 # ---------------------------------------------------------------- layout
@@ -184,6 +323,7 @@ func _draw() -> void:
 		_draw_door(d)
 	for id in rooms:
 		_draw_room_label(str(id), rooms[id])
+	_draw_markers()
 	_draw_you()
 	if show_legend and not compact:
 		_draw_legend()
@@ -340,13 +480,17 @@ func _any_restricted() -> bool:
 
 
 func _draw_door(d: Dictionary) -> void:
-	var rooms: Dictionary = map_data.get("rooms", {})
-	var sa := str((rooms.get(str(d.get("a", "")), {}) as Dictionary).get("state", "unexplored"))
-	var sb := str((rooms.get(str(d.get("b", "")), {}) as Dictionary).get("state", "unexplored"))
-	if sa != "explored" and sb != "explored" and not bool(d.get("always_show", false)) and not bool(d.get("known", false)):
+	if not _door_visible(d):
 		return  # doors are only known once you've seen one side (or "known")
-	var open := str(d.get("state", "open")) == "open"
+	var key := door_key(d)
+	var age := unlock_age(key)
+	var anim := age < UNLOCK_TIME
+	var open := str(d.get("state", "open")) == "open" and not anim   # still looks locked while the lock opens
 	var col := COL_DOOR_OPEN if open else COL_DOOR_LOCKED
+	if open and key in (map_data.get("click_doors", []) as Array):
+		col = COL_DOOR_OPEN.lerp(Color.WHITE, 0.25 + 0.25 * sin(_t * 4.0))   # a doorway you can step through
+	if key == hover_door and not anim:
+		col = col.lightened(0.3)
 	var c: Vector2 = _xf * (d.get("pos", Vector2.ZERO) as Vector2)
 	var along := Vector2.RIGHT if str(d.get("axis", "h")) == "h" else Vector2.DOWN
 	var across := Vector2(-along.y, along.x)
@@ -361,8 +505,40 @@ func _draw_door(d: Dictionary) -> void:
 		_draw_dashes(c - along * half, c + along * half, col, w)
 	draw_line(c - along * half - across * cap, c - along * half + across * cap, col, w, true)
 	draw_line(c + along * half - across * cap, c + along * half + across * cap, col, w, true)
-	if not open:
-		_draw_lock(c, clampf(_scale() * 6.0, 6.5, 12.0), col)
+	var ls := clampf(_scale() * 6.0, 8.0, 12.0)
+	if not open and not anim:
+		_draw_lock(c, ls, col)
+	elif anim:
+		if age < UNLOCK_SHAKE:
+			# shake: the lock rattles side to side, calming a little
+			var k := 1.0 - age / UNLOCK_SHAKE
+			_draw_lock(c + Vector2(sin(age * 70.0) * 2.4 * k, 0.0), ls, col.lerp(COL_DOOR_OPEN, 1.0 - k))
+		else:
+			# pop: the shackle springs open, the lock lifts, grows and fades out
+			var k2 := (age - UNLOCK_SHAKE) / (UNLOCK_TIME - UNLOCK_SHAKE)
+			var a := 1.0 - k2
+			_draw_lock(c + Vector2(0.0, -k2 * ls * 1.2), ls * (1.0 + 0.5 * k2), Color(COL_DOOR_OPEN, a), minf(1.0, k2 * 3.0))
+			draw_arc(c, ls * (0.6 + 1.6 * k2), 0.0, TAU, 20, Color(COL_DOOR_OPEN, 0.8 * a), 1.5, true)
+
+
+func _draw_markers() -> void:
+	for m: Dictionary in markers():
+		var id := str(m.get("id", ""))
+		var r := marker_rect_local(id)
+		if r.size.x < 4.0:
+			continue
+		var hot := id == hover_marker
+		draw_rect(r, COL_MARKER.lightened(0.18) if hot else COL_MARKER)
+		draw_rect(r, Color.WHITE if hot else COL_MARKER_EDGE, false, 1.5 if hot else 1.0)
+		var label := str(m.get("label", id)).to_upper()
+		var fs := clampi(int(r.size.y * 0.62), 7, 14)
+		while fs > 7 and _font_label.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > r.size.x - 4.0:
+			fs -= 1
+		while label.length() > 3 and _font_label.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > r.size.x - 3.0:
+			label = label.substr(0, label.length() - 2).strip_edges() + "."
+		var sz := _font_label.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+		draw_string(_font_label, Vector2(r.position.x + (r.size.x - sz.x) * 0.5, r.position.y + (r.size.y + float(fs) * 0.7) * 0.5),
+			label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, COL_MARKER_INK)
 
 
 func _draw_dashes(a: Vector2, b: Vector2, col: Color, w: float) -> void:
@@ -385,12 +561,15 @@ func _draw_you() -> void:
 
 
 ## Vector padlock (no font glyph): shackle arc + body + keyhole.
-func _draw_lock(c: Vector2, s: float, col: Color) -> void:
+func _draw_lock(c: Vector2, s: float, col: Color, open_amt := 0.0) -> void:
 	var body := Rect2(c.x - s * 0.62, c.y - s * 0.1, s * 1.24, s * 0.95)
-	draw_arc(Vector2(c.x, body.position.y), s * 0.4, PI, TAU, 14, col, maxf(s * 0.18, 1.3), true)
-	draw_line(Vector2(c.x - s * 0.4, body.position.y), Vector2(c.x - s * 0.4, body.position.y + 1), col, maxf(s * 0.18, 1.3))
-	draw_line(Vector2(c.x + s * 0.4, body.position.y), Vector2(c.x + s * 0.4, body.position.y + 1), col, maxf(s * 0.18, 1.3))
-	draw_rect(body.grow(1.0), COL_BG)
+	# open_amt 0..1 lifts the shackle off the body (the "pop")
+	var lift := open_amt * s * 0.55
+	draw_arc(Vector2(c.x, body.position.y - lift), s * 0.4, PI, TAU, 14, col, maxf(s * 0.18, 1.3), true)
+	draw_line(Vector2(c.x - s * 0.4, body.position.y - lift), Vector2(c.x - s * 0.4, body.position.y + 1), col, maxf(s * 0.18, 1.3))
+	if open_amt < 0.5:
+		draw_line(Vector2(c.x + s * 0.4, body.position.y - lift), Vector2(c.x + s * 0.4, body.position.y + 1), col, maxf(s * 0.18, 1.3))
+	draw_rect(body.grow(1.0), Color(COL_BG.r, COL_BG.g, COL_BG.b, COL_BG.a * col.a))
 	draw_rect(body, col)
 	draw_circle(Vector2(c.x, body.position.y + body.size.y * 0.42), maxf(s * 0.14, 1.0), COL_BG)
 	draw_line(Vector2(c.x, body.position.y + body.size.y * 0.42), Vector2(c.x, body.position.y + body.size.y * 0.78), COL_BG, maxf(s * 0.1, 1.0))
@@ -627,8 +806,8 @@ func door_rect_local(key: String) -> Rect2:
 	_update_xform()
 	var c: Vector2 = _xf * (d.get("pos", Vector2.ZERO) as Vector2)
 	var half := maxf(9.0 * _scale(), 5.0)
-	var ext := Vector2(half, maxf(clampf(_scale() * 6.0, 6.5, 12.0), 3.0 * _scale())) if str(d.get("axis", "h")) == "h" \
-		else Vector2(maxf(clampf(_scale() * 6.0, 6.5, 12.0), 3.0 * _scale()), half)
+	var ext := Vector2(half, maxf(clampf(_scale() * 6.0, 8.0, 12.0), 3.0 * _scale())) if str(d.get("axis", "h")) == "h" \
+		else Vector2(maxf(clampf(_scale() * 6.0, 8.0, 12.0), 3.0 * _scale()), half)
 	return Rect2(c - ext, ext * 2.0)
 
 

@@ -19,7 +19,10 @@ extends "res://templates/pda_screen.gd"
 ##
 ## Debug args (after "--"): --screen=ID  --at=SECONDS  --freeze  --complete  --pick=N
 ##                          --qte_left=SECONDS  --no_fade  --open_map
+##                          --open_window=character|ACT_ID (container window pair / character screen)
 ##                          --tour_step=N|move  --map_room=ID  --map_click=ID
+##                          --tutorial_step=N (start the inventory walkthrough at tip N; windows
+##                          opened with --open_window and --no_tutorial skip it)
 ##                          (plus the template's --shot / --die / ...)
 
 const StageScript := preload("res://ui/story_stage.gd")
@@ -28,6 +31,7 @@ const DEATH_BEAT := 1.2          # seconds between a death screen's text and SIG
 const ARRIVE_WAIT := 0.9         # walkthrough: seconds on the map after reaching move_to
 const ARRIVE_OPS_AT := 0.6       # ... with "on_arrive" ops: they run this long after arriving
 const ARRIVE_OPS_WAIT := 2.4     # ... and the map closes this long after arriving
+const UNSUITED_WARNING := "Warning: Going on Excursion without a suit is inadvisable. Do you wish to proceed anyway?"
 
 @export_file("*.json") var scene_path := ""
 
@@ -46,6 +50,10 @@ var game_ui := false                   # scene "ui": "game"
 var fade_rect: ColorRect               # scene "fade_in": black that fades out at the start
 var _fade_tween: Tween
 var tour: MapTour                      # map walkthrough (HIGHLIGHT + TIP)
+var guide_phase := ""                  # "" | "tip": the inventory walkthrough (screen "tutorial")
+var guide_step := 0
+var guide_id := ""
+var _guide_steps: Array = []
 var tour_phase := ""                   # "" | "tip" | "move" | "arrived"
 var tour_step := 0                     # 0-based tip index
 var _tour_pending: Variant = null      # tip index (int) or "move" to open after the text
@@ -70,6 +78,7 @@ func _setup_story() -> void:
 	ensure_vessel_map()
 	_build_overlay()
 	map_moved.connect(_on_map_moved)
+	map_door_activated.connect(_on_door_activated)
 	if float(scene.get("fade_in", 0.0)) > 0.0:
 		fade_rect = ColorRect.new()
 		fade_rect.name = "SceneFade"
@@ -109,6 +118,7 @@ func _build_overlay() -> void:
 	stage.typing_done.connect(_on_typing_done)
 	stage.action_taken.connect(_on_action)
 	stage.act_is_done = _act_already_done
+	stage.container_handler = _open_container
 	if game_ui:
 		_embed_stage()
 	elif bool(scene.get("show_hud", true)):
@@ -168,8 +178,8 @@ func _build_hud() -> void:
 	hud_o2.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	hud_o2.offset_left = -264.0
 	hud_o2.offset_right = -64.0
-	hud_o2.offset_top = 10.0
-	hud_o2.offset_bottom = 26.0
+	hud_o2.offset_top = 8.0
+	hud_o2.offset_bottom = 8.0 + O2Bar.TOTAL_H
 	overlay.add_child(hud_o2)
 	register_o2_bar(hud_o2)
 
@@ -220,6 +230,13 @@ func _begin() -> void:
 			var mc := str(d["map_click"])
 			d.erase("map_click")
 			map_try_move(mc)   # free walking (outside a walkthrough): moves or shows the refusal
+	if d.has("open_window"):
+		# --open_window=character | <container act id>, for layout checks (with --shot).
+		stage.skip_typing(true)
+		if str(d["open_window"]) == "character":
+			show_inv()
+		else:
+			stage.open_act(str(d["open_window"]))
 	_start_fade(not d.has("no_fade") and idx == 0)
 	if d.has("complete"):
 		stage.skip_typing()
@@ -264,6 +281,8 @@ func enter_screen(i: int, pin_q := "", pin_r := "") -> void:
 		push_warning("AuthoredScene: no screen %d" % i)
 		return
 	_death_beat = -1.0
+	if windows != null:
+		windows.close_all(true)   # a new screen never starts under an open window
 	if i != screen_index:
 		_prev_index = screen_index
 	screen_index = i
@@ -278,8 +297,11 @@ func enter_screen(i: int, pin_q := "", pin_r := "") -> void:
 		run_op(op)
 	var end: Dictionary = scr.get("end", {})
 	var hold_target := _order_target(str(end.get("goto", "")) if str(end.get("goto", "")) != "" else str(scene.get("after", "")))
+	if str(end.get("exit", "")) != "":
+		hold_target = ""   # the way out is the door on the map, not a CONTINUE button
 	stage.play(scr, {"speed": scene.get("speed", 40), "title": scene.get("title", ""),
 		"pin_q": pin_q, "pin_r": pin_r, "hold_next": hold_target != ""})
+	_refresh_maps()   # the screen's markers (LOCKER, COFFEE POT) and clickable door
 	if str(end.get("type", "")) == "map_tour" and str(scr.get("text", "")).strip_edges() == "" \
 			and str(scr.get("heading", "")).strip_edges() == "":
 		stage.skip_typing(true)   # nothing to type: the walkthrough opens straight away
@@ -397,6 +419,11 @@ func go(target: String, pin_q := "", pin_r := "") -> void:
 
 
 func _on_action(_act_id: String, action: Dictionary) -> void:
+	var hrs := int(action.get("hours", 0))
+	var why := hours_refusal(hrs)
+	if why != "":
+		os_toast(why)   # not enough hours: nothing happens
+		return
 	var item := str(action.get("item", "")).strip_edges()
 	if item != "":
 		var id := StringName(item)
@@ -404,16 +431,114 @@ func _on_action(_act_id: String, action: Dictionary) -> void:
 		prev["label"] = str(action.get("label", item))
 		prev["desc"] = str(action.get("detail", ""))
 		items[id] = prev
+		mark_item_taken(item)
 		give_item(id)
-	var hrs := int(action.get("hours", 0))
 	if hrs > 0:
-		spend_time_blocks(hrs)
+		spend_hours(hrs)
 	stage.act_hours_live = time_blocks_live
+
+
+## A container act ("container": true) opens the window pair: character screen + this container.
+## A station act ("station": "coffee") opens its own window (the coffee pot).
+func _open_container(act_id: String, spec: Dictionary) -> void:
+	_ensure_windows()
+	if spec.has("station"):
+		open_station(act_id, spec)
+		return
+	windows.taken_check = _container_item_in_inventory
+	play_sfx(&"tap")
+	windows.open_container(act_id, spec)
+
+
+func _container_item_in_inventory(_act_id: String, item: Dictionary) -> bool:
+	return item_ever_taken(str(item.get("id", "")).strip_edges())
+
+
+## Taking an item from a container: same flags / items / hours as the old act choices. The hours are
+## really spent (the ready room arms the hour blocks); too few left = refused before this runs.
+func _on_container_item_taken(act_id: String, item: Dictionary) -> void:
+	if act_id == FLOOR_ACT:
+		super(act_id, item)
+		return
+	_on_action(act_id, {"label": str(item.get("label", "")), "hours": int(item.get("hours", 0)),
+		"item": str(item.get("id", "")), "detail": str(item.get("detail", "")),
+		"required": bool(item.get("required", false))})
 
 
 func _act_already_done(_act_id: String, action: Dictionary) -> bool:
 	var item := str(action.get("item", "")).strip_edges()
-	return item != "" and StringName(item) in inventory
+	return item != "" and item_ever_taken(item)
+
+
+# ---------------------------------------------------------------- map markers + the exit door
+
+## The acts of this screen that have a "marker" get a labelled green rectangle on the map
+## (e.g. LOCKER, COFFEE POT inside the ready room). Clicking it opens the act's window.
+func _scene_map_markers() -> Array:
+	var out: Array = []
+	var acts: Variant = current_screen().get("acts", {})
+	if not (acts is Dictionary):
+		return out
+	for aid: Variant in (acts as Dictionary):
+		var spec: Dictionary = (acts as Dictionary)[aid]
+		if not (spec.get("marker", null) is Dictionary):
+			continue
+		var m: Dictionary = spec["marker"]
+		out.append({"id": str(aid), "kind": "act", "room": str(m.get("room", "ready_room")),
+			"label": str(m.get("label", spec.get("title", aid))), "rect": m.get("rect", [0.03, 0.05, 0.25, 0.17])})
+	return out
+
+
+func _on_map_station_clicked(id: String) -> void:
+	if stage != null and stage.is_container(id):
+		stage.open_act(id)
+
+
+## "end": {"type": "hold", "exit": "door:ready_room|airlock"}: the scene is left through that door.
+func exit_door_key() -> String:
+	var ex := str((current_screen().get("end", {}) as Dictionary).get("exit", "")).strip_edges()
+	if not ex.begins_with("door:"):
+		return ""
+	var parts := ex.substr(5).split("|", false)
+	if parts.size() < 2:
+		return ""
+	var d := map_door_between(parts[0].strip_edges(), parts[1].strip_edges())
+	return ShipMapView.door_key(d) if not d.is_empty() else ""
+
+
+func _map_click_doors() -> Array:
+	var k := exit_door_key()
+	if k == "":
+		return []
+	var parts := k.split("|")
+	var d := map_door_between(parts[0], parts[1])
+	return [k] if str(d.get("state", "open")) == "open" else []
+
+
+## The unlocked exit door was clicked: with the suit on the scene moves on; without it the player is
+## warned first. Yes = go anyway (flags["went_without_suit"]); No = stay.
+func _on_door_activated(key: String) -> void:
+	if exit_door_key() == "" or key != exit_door_key():
+		return
+	if windows_open() or _suit_busy or (confirm_box != null and confirm_box.visible):
+		return
+	if suit_is_worn():
+		_leave_through_exit()
+	else:
+		ask_confirm(UNSUITED_WARNING, _exit_without_suit)
+
+
+func _exit_without_suit() -> void:
+	flags["went_without_suit"] = true
+	vars["went_without_suit"] = true
+	_leave_through_exit()
+
+
+func _leave_through_exit() -> void:
+	var end: Dictionary = current_screen().get("end", {})
+	if map_overlay.visible and not map_locked_open:
+		close_map()
+	go(str(end.get("goto", "")) if str(end.get("goto", "")) != "" else str(scene.get("after", "")))
 
 
 func _on_continue() -> void:
@@ -467,6 +592,7 @@ func _on_qte_expired() -> void:
 
 
 func _on_typing_done() -> void:
+	_maybe_start_tutorial()
 	if stage.end_type() == "death":
 		_death_beat = DEATH_BEAT
 	elif stage.end_type() == "map_tour":
@@ -476,6 +602,130 @@ func _on_typing_done() -> void:
 			_tour_begin_move()
 		else:
 			_tour_show(int(p) if p != null else 0)
+
+
+# ---------------------------------------------------------------- inventory walkthrough (tutorial)
+## A screen with "tutorial": "items" runs this guided walkthrough the first time its text has been
+## read (flag tut_items_done). Same mechanism and look as the map walkthrough (ui/map_tour.gd ->
+## ui/guide_tour.gd): one tip at a time, dim + bracket on what it explains, a CONTINUE button.
+## It is self-contained: it opens the locker window itself to show the grid and the buttons, and
+## closes everything when it ends. No hotkeys are mentioned (the game shows none).
+const TUTORIALS := {
+	"items": [
+		{"target": "story", "text": "Words in GREEN are things you can use. Click one to look closer. The LOCKER and the COFFEE POT are two."},
+		{"target": "markers", "text": "They are marked on the map too. Click LOCKER or COFFEE POT there to use them from the map."},
+		{"target": "container", "open": "container", "text": "A locker shows what is inside. Select an item to read about it."},
+		{"target": "container_actions", "text": "TAKE moves it to your character sheet. The cost in hours is on the button."},
+		{"target": "time", "text": "Everything you do costs hours. Taking an item, putting on the suit, brewing and drinking coffee: 1 hr each. You have 8. They do not come back."},
+		{"target": "character", "text": "This is your character sheet. What you carry shows here. Select an item to see what you can do with it."},
+		{"target": "character", "text": "The SUIT must be put on to be worn. Select it, then Put on (1 hr). Your figure turns green once it is on."},
+		{"target": "character", "text": "Any item can be dropped, for free. It stays on the floor of the room as a green box on the map. Click the box to pick it up again."},
+		{"target": "lock", "close": true, "text": "Orange padlocks on the map are locked doors. Click one to try it. A keycard opens its door."},
+	],
+}
+
+
+func guide_tips() -> Array:
+	return _guide_steps
+
+
+func _maybe_start_tutorial() -> void:
+	var tid := str(current_screen().get("tutorial", "")).strip_edges()
+	if tid == "" or not PdaScreen.tutorials_enabled or not game_ui or not TUTORIALS.has(tid):
+		return
+	if has_flag("tut_%s_done" % tid) or guide_phase != "" or _dbg.has("no_tutorial") or _dbg.has("open_window"):
+		return
+	guide_start(tid, int(str(_dbg.get("tutorial_step", "1"))) - 1)
+
+
+func guide_start(tid: String, first := 0) -> void:
+	if not TUTORIALS.has(tid):
+		return
+	_guide_steps = TUTORIALS[tid]
+	guide_id = tid
+	_ensure_windows()
+	if guide_tour == null:
+		guide_tour = GuideTour.new()
+		(guide_tour as GuideTour).continued.connect(guide_next)
+		add_child(guide_tour)
+		move_child(guide_tour, pause_menu.get_index())   # over the windows, under the pause menu
+	windows.set_animated(true)
+	_guide_show(clampi(first, 0, _guide_steps.size() - 1))
+
+
+func _guide_show(n: int) -> void:
+	guide_phase = "tip"
+	guide_step = n
+	var st: Dictionary = _guide_steps[n]
+	if bool(st.get("close", false)):
+		windows.close_all(false)
+	var open := str(st.get("open", ""))
+	if open == "container" and not windows.container_open():
+		_open_container("locker", (current_screen().get("acts", {}) as Dictionary).get("locker", {}))
+		_guide_select_first()
+	elif open == "container":
+		_guide_select_first()
+	(guide_tour as GuideTour).show_step(n, _guide_steps.size(), str(st.get("text", "")), _guide_rect.bind(str(st.get("target", ""))))
+
+
+func _guide_select_first() -> void:
+	var c: Control = windows.container
+	for it: Dictionary in c.items:
+		if not bool(it.get("taken", false)):
+			c.select_id(str(it.get("id", "")))
+			return
+
+
+func guide_next() -> void:
+	if guide_phase != "tip":
+		return
+	play_sfx(&"tap")
+	if guide_step + 1 < _guide_steps.size():
+		_guide_show(guide_step + 1)
+	else:
+		_guide_finish()
+
+
+func _guide_finish() -> void:
+	guide_phase = ""
+	if guide_tour:
+		guide_tour.hide()
+	windows.close_all(false)
+	flags["tut_%s_done" % guide_id] = true
+
+
+## Global rectangle of what a tip explains (Rect2() = nothing to highlight; the tip is centred).
+func _guide_rect(target: String) -> Rect2:
+	match target:
+		"story":
+			return stage.get_global_rect() if stage != null else Rect2()
+		"markers":
+			var r := Rect2()
+			for id in ["locker", "coffee"]:
+				var m := _mini_map.marker_rect_local(id)
+				if m.size.x > 0.0:
+					m.position += _mini_map.global_position
+					r = m if r.size == Vector2.ZERO else r.merge(m)
+			return r
+		"container":
+			return (windows.container.grid_bg as Control).get_global_rect() if windows.container_open() else Rect2()
+		"container_actions":
+			if not windows.container_open():
+				return Rect2()
+			var row := windows.container.actions_row as Control
+			var er := (windows.container.exit_button as Control).get_global_rect()
+			var ar := row.get_global_rect()
+			return Rect2(ar.position, Vector2(er.end.x - ar.position.x, ar.size.y))
+		"time":
+			return time_box.get_global_rect() if time_box != null else Rect2()
+		"character":
+			return (windows.character.grid_bg as Control).get_global_rect() if windows.character_open() else Rect2()
+		"lock":
+			var dr := _mini_map.door_rect_local("ready_room|airlock")
+			if dr.size.x <= 0.0:
+				return Rect2()
+			return Rect2(dr.position + _mini_map.global_position, dr.size).grow(4.0)
+	return Rect2()
 
 
 # ---------------------------------------------------------------- map walkthrough
@@ -622,6 +872,9 @@ func _retry(target: String, fallback: int) -> void:
 # ---------------------------------------------------------------- template hooks
 
 func _on_advance() -> bool:
+	if guide_phase == "tip" and guide_tour and guide_tour.visible:
+		guide_tour.press()
+		return true
 	if tour_phase == "tip" and tour and tour.visible:
 		tour.press()
 		return true
@@ -654,8 +907,14 @@ func _on_death_shown() -> void:
 
 func _dev_stop_chapter() -> void:
 	_death_beat = -1.0
+	if windows != null:
+		windows.close_all(true)
 	_tour_token += 1
 	_tour_pending = null
+	if guide_phase != "":
+		guide_phase = ""
+		if guide_tour:
+			guide_tour.hide()
 	if tour_phase != "":
 		_tour_close()
 	if fade_rect:

@@ -89,6 +89,7 @@ func _initialize() -> void:
 
 
 func _run() -> void:
+	PdaScreen.tutorials_enabled = false
 	test_data()
 	test_map_data()
 	await test_handoff()
@@ -122,8 +123,8 @@ func test_data() -> void:
 	check("data: cues inside the clip (%.2f s), in order, no overlap" % (stream.get_length() if stream else -1.0),
 		stream != null and float(VO_CUES[-1][1]) <= stream.get_length() and VO_CUES[0][0] < VO_CUES[0][1]
 		and VO_CUES[1][0] >= VO_CUES[0][1] and VO_CUES[2][0] >= VO_CUES[1][1] and VO_CUES[3][0] >= VO_CUES[2][1])
-	check("data: brief on_enter names the READY ROOM + AIRLOCK, opens the STASIS-15 door",
-		(screens[0]["on_enter"] as Array).has("map_know_room:ready_room") and (screens[0]["on_enter"] as Array).has("map_know_room:airlock")
+	check("data: brief on_enter names the READY ROOM (the AIR LOCK stays nameless until its door is unlocked), opens the STASIS-15 door",
+		(screens[0]["on_enter"] as Array).has("map_know_room:ready_room") and not (screens[0]["on_enter"] as Array).has("map_know_room:airlock")
 		and (screens[0]["on_enter"] as Array).has("map_unlock_door:stasis_15|ready_room"))
 	var tips: Array = (screens[1]["end"] as Dictionary).get("tips", [])
 	var same := tips.size() == TIPS.size()
@@ -135,17 +136,20 @@ func test_data() -> void:
 	var e1: Dictionary = screens[1]["end"]
 	check("data: walkthrough ends by walking to the READY ROOM", str(e1["type"]) == "map_tour" and str(e1["move_to"]) == "ready_room"
 		and str(e1["move_prompt"]) == BRIEF_P2)
-	check("data: on arrival STBD HOLD turns RESTRICTED (on_arrive op)", e1["on_arrive"] == ["map_restrict_room:stbd_hold"])
+	check("data: no timed RESTRICTED stamp any more (on_arrive empty; it appears when the lock is clicked)", e1["on_arrive"] == [])
 	var e2: Dictionary = screens[2]["end"]
-	check("data: READY ROOM teaches the locker, suit required to leave, hours shown not spent",
+	check("data: READY ROOM = locker + coffee pot links, arms the hours, leaves through the airlock door (no SUIT REQUIRED gate)",
 		str(screens[2]["heading"]) == "READY ROOM" and str(screens[2]["text"]).contains("[act=locker]LOCKER[/act]")
-		and str(screens[2]["text"]).contains("does not spend them") and str(e2["type"]) == "continue"
-		and str(e2["goto"]) == "order:next" and str(e2["require"]) == "suit"
-		and (screens[2]["on_enter"] as Array).has("map_restrict_room:stbd_hold")
-		and str(screens[2]["acts"]["locker"]["choices"][0]["item"]) == "suit"
-		and str(screens[2]["acts"]["locker"]["choices"][0]["label"]) == "SUIT"
-		and int(screens[2]["acts"]["locker"]["choices"][1]["hours"]) == 1
-		and str(screens[2]["acts"]["locker"]["text"]).contains("does not spend them"))
+		and str(screens[2]["text"]).contains("[act=coffee]COFFEE POT[/act]") and not str(screens[2]["text"]).contains("does not spend")
+		and str(e2["type"]) == "hold" and str(e2["goto"]) == "order:next" and str(e2["exit"]) == "door:ready_room|airlock"
+		and not e2.has("require") and str(screens[2]["tutorial"]) == "items"
+		and (screens[2]["on_enter"] as Array).has("arm_hours") and not (screens[2]["on_enter"] as Array).has("map_restrict_room:stbd_hold")
+		and bool(screens[2]["acts"]["locker"]["container"])
+		and str(screens[2]["acts"]["locker"]["items"][0]["id"]) == "suit"
+		and str(screens[2]["acts"]["locker"]["items"][0]["label"]) == "SUIT"
+		and int(screens[2]["acts"]["locker"]["items"][1]["hours"]) == 1
+		and str(screens[2]["acts"]["locker"]["items"][2]["id"]) == "airlock_keycard"
+		and str(screens[2]["acts"]["coffee"]["station"]) == "coffee")
 	var before := FileAccess.get_file_as_string(JSON_PATH)
 	var res := Builder.build(d)
 	check("data: Scene Writer builder rebuilds it unchanged (%s)" % res["message"], bool(res["ok"])
@@ -181,8 +185,8 @@ func test_map_data() -> void:
 	check("map: READY ROOM = the big room above STASIS-15 (was COMMISSARY), unexplored",
 		str(rr.get("label", "")) == "READY ROOM" and str(rr.get("state", "")) == "unexplored"
 		and (rr.get("poly", []) as Array).size() == 4 and (rr["poly"][0] as Vector2).is_equal_approx(Vector2(45, 111)))
-	check("map: AIRLOCK = the L on the left (was READY ROOM / PORT ACCESS), unexplored",
-		str(al.get("label", "")) == "AIRLOCK" and str(al.get("state", "")) == "unexplored" and (al.get("poly", []) as Array).size() == 8)
+	check("map: AIR LOCK = the L on the left (was READY ROOM / PORT ACCESS), unexplored",
+		str(al.get("label", "")) == "AIR LOCK" and str(al.get("state", "")) == "unexplored" and (al.get("poly", []) as Array).size() == 8)
 	check("map: no COMMISSARY / PORT ACCESS left", not rooms.has("commissary") and not rooms.has("port_access"))
 	var st := {}
 	for dd: Dictionary in m["doors"]:
@@ -286,7 +290,7 @@ func test_chapter() -> void:
 	for c in pda.time_bar.get_children():
 		if c is ColorRect and (c as ColorRect).color.g > 0.5:
 			filled += 1
-	check("game UI: 8 hour blocks, full, not live yet", pda.time_bar.visible and filled == 8
+	check("game UI: 8 hour blocks, full, not live yet (the intro screens do not arm them)", pda.time_bar.visible and filled == 8
 		and pda.time_blocks == 8 and not pda.time_blocks_live and pda.spend_time_blocks(1) == false and pda.time_blocks == 8)
 	var title_w: float = pda.title_label.get_theme_font("font").get_string_size(pda.title_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1,
 		pda.title_label.get_theme_font_size("font_size")).x
@@ -298,9 +302,9 @@ func test_chapter() -> void:
 	check("game UI: story typed in the LOG column (stage embedded, no stage status line / overlay HUD)",
 		pda.stage.get_parent() == pda.log_view and not pda.story_text.visible and not pda.stage.status_label.visible
 		and pda.hud_map == null)
-	check("map: READY ROOM + AIRLOCK names known but not explored; STBD HOLD nameless; side doors drawn",
+	check("map: READY ROOM name known but not explored; AIR LOCK + STBD HOLD nameless; side doors drawn",
 		bool(pda.vessel_map["rooms"]["ready_room"].get("known", false)) and pda.vessel_map["rooms"]["ready_room"]["state"] == "unexplored"
-		and pda._map_room_label("ready_room") == "READY ROOM" and pda._map_room_label("airlock") == "AIRLOCK"
+		and pda._map_room_label("ready_room") == "READY ROOM" and pda._map_room_label("airlock") == "UNCHARTED COMPARTMENT"
 		and pda.vessel_map["rooms"]["airlock"]["state"] == "unexplored" and pda._map_room_label("stbd_hold") == "UNCHARTED COMPARTMENT"
 		and pda.map_door_between("ready_room", "stbd_hold").get("known", false) and pda.map_door_between("ready_room", "airlock").get("known", false)
 		and not pda.map_room_restricted("stbd_hold"))
@@ -397,59 +401,42 @@ func test_chapter() -> void:
 		and pda.vessel_map["rooms"]["ready_room"]["state"] == "explored" and dot2.distance_to(rc) < 1.0 and pda.tour_phase == "arrived")
 	check("arrival: STBD HOLD not restricted yet, door still locked", not pda.map_room_restricted("stbd_hold")
 		and pda.map_door_between("ready_room", "stbd_hold")["state"] == "locked")
-	await wait_s(pda.ARRIVE_OPS_AT + 0.15)
+	await wait_s(pda.ARRIVE_WAIT + 0.4)
 	var fm = pda._full_map
-	var age: float = fm.stamp_age("stbd_hold")
-	var sr: Rect2 = fm.stamp_rect_local("stbd_hold")
-	var hr: Rect2 = fm.room_rect_local("stbd_hold")
-	check("RESTRICTED: pops on STBD HOLD while the map is still open (age %.2f s, stamp %s in room %s)" % [age, str(sr), str(hr)],
-		pda.map_room_restricted("stbd_hold") and pda.map_overlay.visible and age < fm.STAMP_POP + 0.2 and sr.size.x > 4.0
-		and hr.grow(0.5).encloses(sr) and pda.tour_phase == "arrived")
-	check("RESTRICTED: stamp also popping on the minimap", pda._mini_map.room_restricted("stbd_hold")
-		and pda._mini_map.stamp_age("stbd_hold") < fm.STAMP_POP + 0.2)
-	check("RESTRICTED: door stays locked, room not explored, legend gains RESTRICTED", pda.map_door_between("ready_room", "stbd_hold")["state"] == "locked"
-		and pda.vessel_map["rooms"]["stbd_hold"]["state"] == "unexplored" and fm._legend_entries().size() == 7
-		and str(fm._legend_entries()[-1][3]) == "RESTRICTED")
-	await wait_s(pda.ARRIVE_OPS_WAIT - pda.ARRIVE_OPS_AT - 0.15 + 0.35)
+	check("arrival: NO timed RESTRICTED stamp (the label waits for a click on its lock), door still locked",
+		not pda.map_room_restricted("stbd_hold") and fm.stamp_age("stbd_hold") > 100.0
+		and pda.map_door_between("ready_room", "stbd_hold")["state"] == "locked" and fm._legend_entries().size() == 6)
 	check("arrival: map closes by itself, holding screen READY ROOM", not pda.map_overlay.visible and not pda.map_locked_open
 		and pda.map_close_button.visible and pda.screen_index == 2 and pda.stage.heading_label.text == "READY ROOM")
-	check("arrival: the screen's own restrict op does not pop the stamp again (age %.2f s)" % fm.stamp_age("stbd_hold"),
-		fm.stamp_age("stbd_hold") > 1.0 and pda._mini_map.stamp_age("stbd_hold") > 1.0)
-	await key(KEY_SPACE)
+	pda.stage.skip_typing(true)
 	await frames(2)
 	var rtxt: String = pda.stage.text_label.get_parsed_text()
-	check("arrival: locker tutorial, CONTINUE, hours not a hold", rtxt.contains("LOCKER") and rtxt.contains("does not spend them")
-		and pda.stage.continue_button.visible and pda.stage.end_type() == "continue" and no_hints(rtxt))
+	check("arrival: ready room text (locker, coffee pot), no CONTINUE, hours armed", rtxt.contains("LOCKER") and rtxt.contains("COFFEE POT")
+		and not pda.stage.continue_button.visible and pda.stage.end_type() == "hold" and no_hints(rtxt)
+		and pda.time_blocks_live and pda.time_blocks == 8)
 	await key(KEY_SPACE)
 	await frames(2)
-	check("arrival: SUIT required, still in the ready room", pda.screen_index == 2
+	check("arrival: Space does nothing here (no gate toast, no next screen)", pda.screen_index == 2
 		and not str(pda.stage.text_label.get_parsed_text()).contains("The next scene isn't written.")
-		and pda.os_line_label.text.contains("SUIT REQUIRED"))
-	pda.give_item(&"suit")
-	await key(KEY_SPACE)
-	await frames(2)
-	check("arrival: with the suit, NEXT shows the unwritten screen", pda.screen_index == 2
-		and str(pda.stage.text_label.get_parsed_text()).contains("The next scene isn't written.")
-		and str(pda.scene_file_path).ends_with("excursion1_prep.tscn"))
+		and not pda.os_line_label.text.contains("SUIT REQUIRED"))
 	var mm = pda._mini_map
-	var msr: Rect2 = mm.stamp_rect_local("stbd_hold")
-	check("arrival: minimap shows READY ROOM current + explored, STBD HOLD restricted (stamp %s)" % str(msr),
-		mm.map_data["current"] == "ready_room" and mm.room_state("ready_room") == "explored" and mm.room_restricted("stbd_hold")
-		and msr.size.x > 2.0 and Rect2(Vector2.ZERO, mm.size).intersects(msr))
+	check("arrival: minimap shows READY ROOM current + explored, STBD HOLD NOT restricted yet, LOCKER + COFFEE POT markers",
+		mm.map_data["current"] == "ready_room" and mm.room_state("ready_room") == "explored" and not mm.room_restricted("stbd_hold")
+		and mm.marker_rect_local("locker").size.x > 10.0 and mm.marker_rect_local("coffee").size.x > 10.0)
 	await stage_fits("READY ROOM holding screen")
 	check("after the walkthrough: the map still opens and moves work (map usable from here on)", pda.map_moves_enabled())
 	pda.open_map()
 	await frames(2)
 	await click(room_center_global("stbd_hold"))
-	check("free walking: STBD HOLD → RESTRICTED (amber), no move", pda.map_last_message == pda.MAP_MSG_RESTRICTED
-		and pda.map_info.text == pda.MAP_MSG_RESTRICTED and pda.vessel_map["current"] == "ready_room"
+	check("free walking: STBD HOLD room click → KEYCARD REQUIRED (amber), no move, no label reveal", pda.map_last_message == pda.MAP_MSG_KEYCARD
+		and pda.map_info.text == pda.MAP_MSG_KEYCARD and pda.vessel_map["current"] == "ready_room" and not pda.map_room_restricted("stbd_hold")
 		and pda.map_info.get_theme_color("font_color").is_equal_approx(pda.MAP_MSG_COLOR))
 	await click(room_center_global("airlock"))
 	check("free walking: AIRLOCK → KEYCARD REQUIRED (locked door), no move", pda.map_last_message == pda.MAP_MSG_KEYCARD
 		and pda.vessel_map["current"] == "ready_room" and pda.vessel_map["rooms"]["airlock"]["state"] == "unexplored")
 	pda._map_msg_until = 0
 	pda._on_map_room_hovered("stbd_hold")
-	check("free walking: hovering STBD HOLD reads RESTRICTED", pda.map_info.text.ends_with("RESTRICTED"))
+	check("free walking: hovering STBD HOLD reads UNCHARTED (nameless until its lock is clicked)", pda.map_info.text.begins_with("UNCHARTED COMPARTMENT"))
 	await click(room_center_global("stasis_15"))
 	check("free walking: READY ROOM → STASIS-15 through the open door", pda.vessel_map["current"] == "stasis_15" and pda.map_overlay.visible)
 	pda.close_map()
@@ -462,6 +449,7 @@ func test_chapter() -> void:
 			and pda.map_locked_open and pda.map_moves_enabled() and pda.screen_index == 1)
 	# the "next" hook: a hold screen shows CONTINUE once the scene has an "after"
 	pda.scene["after"] = "intro:home_bunk"
+	(pda.screens[2]["end"] as Dictionary).erase("exit")   # a hold without an exit door
 	pda._dev_stop_chapter()
 	pda.screen_index = -1
 	pda.enter_screen(2)

@@ -278,14 +278,14 @@ low-pass on the Music bus, heartbeat = UI-1.mp3 pitched down; doors = airlockdoo
 
 ## Windows build (shareable .exe)
 `export_presets.cfg` has one preset, **Windows Desktop**: x86_64, PCK embedded (one .exe), console
-wrapper only for debug exports, product name "Space Horror", version 0.1.1.0 (0.1.0 = before the title screen), icon = the project icon
+wrapper only for debug exports, product name "Space Horror", version 0.2.0.0 (0.1.0 = before the title screen, 0.1.1 = title screen, 0.2 = ready room items / windows), icon = the project icon
 (`icon.svg`, converted by Godot; no rcedit needed). Filters: all resources + `story/scenes/*.json`
 (the Scene Writer scenes are read with FileAccess at runtime); `tools/*`, `docs/*`, `addons/*` and `README.md` are left out. `story/SCENE_ORDER.md` is included. Needs the Godot **4.6.3** export templates (Editor > Manage Export Templates, or
 `%APPDATA%\Godot\export_templates\4.6.3.stable\`). Export with the 4.6.3 editor (what the tests use):
 ```
-Godot_v4.6.3-stable_win64_console.exe --headless --path "D:\Game Projects\space-horror-pc" --export-release "Windows Desktop" "D:\Game Projects\space-horror-pc-builds\0.1.1\SpaceHorror.exe"
+Godot_v4.6.3-stable_win64_console.exe --headless --path "D:\Game Projects\space-horror-pc" --export-release "Windows Desktop" "D:\Game Projects\space-horror-pc-builds\0.2\SpaceHorror.exe"
 ```
-Then zip `SpaceHorror.exe` alone (`SpaceHorror-0.1.1-windows.zip`). Release exports have no dev back
+Then zip `SpaceHorror.exe` alone (`SpaceHorror-0.2-windows.zip`). Release exports have no dev back
 (`OS.is_debug_build()` is false) and ignore every debug arg (`_read_debug_args()` returns nothing).
 The .exe is unsigned: Windows SmartScreen shows "Windows protected your PC" the first time (More info >
 Run anyway). Bump the version in the preset (`application/file_version` / `product_version`) and the

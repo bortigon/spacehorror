@@ -28,6 +28,15 @@ const VESSEL_TITLE := VESSEL_PREFIX + " " + VESSEL_NAME   # "RSV ABEYANCE"
 ##   map_unlock_room:id  map_unlock_door:a|b  map_lock_door:a|b  open_map
 ##   map_know_room:id  map_know_door:a|b  map_moves:on|off  map_restrict_room:id
 ##   map_unrestrict_room:id
+## LOCKED DOORS WITH A CARD: a locked door can carry
+##   "key": item id the player must hold ("airlock_keycard"), "key_name": its exact display name
+##   ("Airlock Keycard"; the click message reads "Requires Airlock Keycard"), "behind": the room
+##   it leads to, and optionally "fail": "restrict" (clicking the lock WITHOUT the card reveals the
+##   RESTRICTED stamp on the room behind it). The lock icons on the maps are clickable
+##   (PdaScreen.map_door_click): with the card the lock shakes, pops open and the open doorway
+##   replaces it, and the room behind becomes "known" (its name shows). To add another card, give a
+##   door its own "key" / "key_name" (e.g. "restricted_keycard" / "Restricted Keycard") and make an
+##   item with that id.
 static func default_map() -> Dictionary:
 	return {
 		"title": VESSEL_TITLE,
@@ -52,13 +61,13 @@ static func default_map() -> Dictionary:
 			# beside the ready room). Was the placeholder PORT ACCESS; now the AIRLOCK: a named dark
 			# room behind the ready room's port door (padlocked, as in the mockup).
 			"airlock": {
-				"label": "AIRLOCK",
+				"label": "AIR LOCK",   # shown once the door is unlocked (the room is nameless before that)
 				"poly": [Vector2(6, 24), Vector2(55, 24), Vector2(55, 87), Vector2(16, 87),
 					Vector2(16, 111), Vector2(42, 111), Vector2(42, 194), Vector2(6, 194)],
 				"state": "unexplored",
 			},
 			# Unlabelled grey room right of the ready room (runs off the mockup's frame).
-			# EXCURSION 1 PREP marks it RESTRICTED when you reach the ready room (map_restrict_room).
+			# Its lock tells the player it is RESTRICTED when they try the door (see "fail" below).
 			"stbd_hold": {
 				"label": "STBD HOLD",
 				"poly": [Vector2(204, 111), Vector2(234, 111), Vector2(234, 194), Vector2(204, 194)],
@@ -81,7 +90,9 @@ static func default_map() -> Dictionary:
 			{"a": "stasis_15", "b": "ready_room", "pos": Vector2(121, 195.5), "axis": "h", "state": "open"},
 			# Doorways on the ready room's left and right walls, padlocked as in the mockup
 			# (KEYCARD REQUIRED): port side = AIRLOCK, starboard side = STBD HOLD (RESTRICTED).
-			{"a": "ready_room", "b": "airlock", "pos": Vector2(43.5, 150), "axis": "v", "state": "locked"},
-			{"a": "ready_room", "b": "stbd_hold", "pos": Vector2(202.5, 150), "axis": "v", "state": "locked"},
+			{"a": "ready_room", "b": "airlock", "pos": Vector2(43.5, 150), "axis": "v", "state": "locked",
+				"key": "airlock_keycard", "key_name": "Airlock Keycard", "behind": "airlock"},
+			{"a": "ready_room", "b": "stbd_hold", "pos": Vector2(202.5, 150), "axis": "v", "state": "locked",
+				"key": "restricted_keycard", "key_name": "Restricted Keycard", "behind": "stbd_hold", "fail": "restrict"},
 		],
 	}

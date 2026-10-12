@@ -99,6 +99,13 @@ var pause_spin: SpinBox
 var act_id_edit: LineEdit
 var act_text_edit: TextEdit
 var act_box: VBoxContainer
+var act_container_check: CheckBox
+var act_container_box: VBoxContainer
+var act_title_edit: LineEdit
+var act_cols_spin: SpinBox
+var act_rows_spin: SpinBox
+var act_add_button: Button
+var act_back_note: Label
 var text_edit: TextEdit
 var question_edit: LineEdit
 var sspeed_slider: HSlider
@@ -485,21 +492,53 @@ func _build_screen_column() -> Control:
 	col.add_child(help)
 	var act_head := HBoxContainer.new()
 	act_head.add_child(_section("ACT"))
-	act_head.add_child(_button("Add option", _add_act_action, "Adds a choice. Hours show as (1 hr) or (N hrs). Back is not a choice."))
+	act_add_button = _button("Add option", _add_act_action, "Adds a choice. Hours show as (1 hr) or (N hrs). Back is not a choice.")
+	act_head.add_child(act_add_button)
+	act_container_check = CheckBox.new()
+	act_container_check.name = "ActContainer"
+	act_container_check.text = "Container"
+	act_container_check.tooltip_text = "A container opens as a window (with the character screen beside it) instead of replacing the screen text. Its items are taken one by one."
+	act_container_check.toggled.connect(_on_act_container_toggled)
+	act_head.add_child(act_container_check)
 	col.add_child(act_head)
-	var act_back_note := Label.new()
+	act_back_note = Label.new()
 	act_back_note.name = "ActBackNote"
 	act_back_note.text = "Back is added automatically and is not a row you edit. Back returns to the text that called this act."
 	act_back_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	act_back_note.add_theme_color_override("font_color", DIM)
 	act_back_note.add_theme_font_size_override("font_size", int(_s(11)))
 	col.add_child(act_back_note)
+	act_container_box = VBoxContainer.new()
+	act_container_box.name = "ContainerFields"
+	act_container_box.add_theme_constant_override("separation", int(_s(4)))
+	var title_row := HBoxContainer.new()
+	title_row.add_child(_label("Window title", 110))
+	act_title_edit = LineEdit.new()
+	act_title_edit.name = "ContainerTitle"
+	act_title_edit.placeholder_text = "LOCKER"
+	act_title_edit.tooltip_text = "Title at the top-left of the window. Empty = the act id in capitals."
+	act_title_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	act_title_edit.text_changed.connect(_on_container_title_changed)
+	title_row.add_child(act_title_edit)
+	title_row.add_child(_label("Grid", 40))
+	act_cols_spin = _spin(1, 8, 1, 3)
+	act_cols_spin.name = "ContainerCols"
+	act_cols_spin.suffix = "cols"
+	act_cols_spin.value_changed.connect(func(_v: float) -> void: _on_container_grid_changed())
+	title_row.add_child(act_cols_spin)
+	act_rows_spin = _spin(1, 8, 1, 3)
+	act_rows_spin.name = "ContainerRows"
+	act_rows_spin.suffix = "rows"
+	act_rows_spin.value_changed.connect(func(_v: float) -> void: _on_container_grid_changed())
+	title_row.add_child(act_rows_spin)
+	act_container_box.add_child(title_row)
+	col.add_child(act_container_box)
 	act_text_edit = TextEdit.new()
 	act_text_edit.name = "ActText"
 	act_text_edit.custom_minimum_size.y = _s(72)
 	act_text_edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
-	act_text_edit.placeholder_text = "Replacement text"
-	act_text_edit.tooltip_text = "This replaces the screen when the act word is clicked. It may contain [act=id]word[/act]."
+	act_text_edit.placeholder_text = "Replacement text (container: description under the title)"
+	act_text_edit.tooltip_text = "Function: this replaces the screen when the act word is clicked (it may contain [act=id]word[/act]). Container: the description shown under the window title."
 	act_text_edit.text_changed.connect(_on_act_text_changed)
 	col.add_child(act_text_edit)
 	act_box = VBoxContainer.new()
@@ -2140,8 +2179,8 @@ func _ensure_act() -> Dictionary:
 	var found := _find_act(id)
 	if not found.is_empty():
 		return found
-	if not (s.get("acts", {}) is Dictionary):
-		s["acts"] = {}
+	if not s.has("acts") or not (s["acts"] is Dictionary):
+		s["acts"] = {}   # (screens without acts have no "acts" key at all)
 	var made := {"text": "", "choices": []}
 	(s["acts"] as Dictionary)[id] = made
 	return made
@@ -2151,6 +2190,11 @@ func _add_act_action() -> void:
 	if _cur_screen().is_empty() or _loading:
 		return
 	var spec := _ensure_act()
+	if spec.has("station"):
+		return   # a station (coffee pot) has code-defined options
+	if bool(spec.get("container", false)):
+		_add_container_item(spec)
+		return
 	var choices: Array = spec["choices"]
 	var n := choices.size() + 1
 	choices.append({
@@ -2164,9 +2208,73 @@ func _add_act_action() -> void:
 	_rebuild_act_editor()
 
 
+## Container checkbox: turns the act into a window (items) or back into a function (choices). No data is lost.
+func _on_act_container_toggled(on: bool) -> void:
+	if _loading or _cur_screen().is_empty():
+		return
+	var spec := _ensure_act()
+	if spec.has("station"):
+		_rebuild_act_editor()   # stations stay stations
+		return
+	if on and not bool(spec.get("container", false)):
+		var items: Array = []
+		for c: Dictionary in spec.get("choices", []):
+			items.append(SceneData.normalize_container_item(c))
+		spec.erase("choices")
+		spec["container"] = true
+		spec["title"] = str(spec.get("title", SceneData.sanitize_id(act_id_edit.text).to_upper()))
+		spec["grid"] = {"cols": SceneData.CONTAINER_COLS, "rows": SceneData.CONTAINER_ROWS}
+		spec["items"] = items
+	elif not on and bool(spec.get("container", false)):
+		var choices: Array = []
+		for it: Dictionary in spec.get("items", []):
+			if "take" in (it.get("actions", ["take"]) as Array):
+				choices.append({"label": str(it.get("label", "")), "hours": int(it.get("hours", 0)), "item": str(it.get("id", "")),
+					"detail": str(it.get("detail", "")), "required": bool(it.get("required", false))})
+		for k in ["container", "title", "grid", "items"]:
+			spec.erase(k)
+		spec["choices"] = choices
+	_mark()
+	_rebuild_act_editor()
+
+
+func _on_container_title_changed(t: String) -> void:
+	if _loading or _cur_screen().is_empty():
+		return
+	var spec := _find_act(SceneData.sanitize_id(act_id_edit.text))
+	if spec.is_empty() or not bool(spec.get("container", false)):
+		return
+	spec["title"] = t
+	_mark()
+
+
+func _on_container_grid_changed() -> void:
+	if _loading or _cur_screen().is_empty():
+		return
+	var spec := _find_act(SceneData.sanitize_id(act_id_edit.text))
+	if spec.is_empty() or not bool(spec.get("container", false)):
+		return
+	spec["grid"] = {"cols": int(act_cols_spin.value), "rows": int(act_rows_spin.value)}
+	_mark()
+
+
+func _add_container_item(spec: Dictionary) -> void:
+	var items: Array = spec["items"]
+	var n := items.size() + 1
+	var id := "item_%d" % n
+	while items.any(func(it: Dictionary) -> bool: return str(it.get("id", "")) == id):
+		n += 1
+		id = "item_%d" % n
+	items.append({"id": id, "label": id.to_upper().replace("_", " "), "hours": 1, "required": false, "detail": "", "actions": ["take"]})
+	_mark()
+	_rebuild_act_editor()
+
+
 func _drop_act_if_empty(id: String, spec: Dictionary) -> void:
 	if str(spec.get("text", "")).strip_edges() != "":
 		return
+	if bool(spec.get("container", false)) or spec.has("station"):
+		return   # an act marked Container stays until the box is unticked (it has a window title and grid)
 	if not (spec.get("choices", []) as Array).is_empty():
 		return
 	var raw: Variant = _cur_screen().get("acts", {})
@@ -2191,7 +2299,29 @@ func _rebuild_act_editor() -> void:
 		if act_text_edit.text != body:
 			act_text_edit.text = body
 		_loading = was
+	var is_container := bool(spec.get("container", false))
+	var is_station := spec.has("station")
+	var was2 := _loading
+	_loading = true
+	act_container_check.button_pressed = is_container
+	act_container_check.disabled = is_station
+	act_add_button.disabled = is_station
+	act_container_box.visible = is_container
+	act_back_note.visible = not is_container
+	act_back_note.text = ("STATION (%s): a window with a picture and options, defined in code. Only its text is edited here." % str(spec.get("station", ""))) \
+		if is_station else "Back is added automatically and is not a row you edit. Back returns to the text that called this act."
+	act_add_button.text = "Add item" if is_container else "Add option"
+	act_add_button.tooltip_text = "Adds an item to the container window. Take is its action." if is_container \
+		else "Adds a choice. Hours show as (1 hr) or (N hrs). Back is not a choice."
+	if is_container:
+		act_title_edit.text = str(spec.get("title", ""))
+		act_cols_spin.value = float((spec.get("grid", {}) as Dictionary).get("cols", SceneData.CONTAINER_COLS))
+		act_rows_spin.value = float((spec.get("grid", {}) as Dictionary).get("rows", SceneData.CONTAINER_ROWS))
+	_loading = was2
 	if spec.is_empty():
+		return
+	if is_container:
+		_rebuild_container_items(spec)
 		return
 	var choices: Array = spec.get("choices", [])
 	for ad: Dictionary in choices:
@@ -2243,6 +2373,78 @@ func _rebuild_act_editor() -> void:
 			_drop_act_if_empty(id, spec)
 			_mark()
 			_rebuild_act_editor()).bind(ad)))
+		act_box.add_child(row)
+
+
+## One row per container item: id, label, hours, Required, detail.
+func _rebuild_container_items(spec: Dictionary) -> void:
+	var items: Array = spec.get("items", [])
+	for ad: Dictionary in items:
+		var row := VBoxContainer.new()
+		row.name = "ItemRow"
+		row.add_theme_constant_override("separation", int(_s(2)))
+		var top := HBoxContainer.new()
+		top.add_theme_constant_override("separation", int(_s(4)))
+		var iid := LineEdit.new()
+		iid.name = "ItemId"
+		iid.text = str(ad.get("id", ""))
+		iid.placeholder_text = "id"
+		iid.tooltip_text = "Item id added to the inventory when it is taken (sets the flag has_<id>). suit and lantern already exist."
+		iid.custom_minimum_size.x = _s(90)
+		iid.text_changed.connect((func(t: String, row_data: Dictionary) -> void:
+			if _loading:
+				return
+			row_data["id"] = SceneData.sanitize_id(t)
+			_mark()).bind(ad))
+		top.add_child(iid)
+		var lab := LineEdit.new()
+		lab.name = "ItemLabel"
+		lab.text = str(ad.get("label", ""))
+		lab.placeholder_text = "Label"
+		lab.tooltip_text = "Name shown on the item cell, in the description and on the button (Take LABEL)."
+		lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lab.text_changed.connect((func(t: String, row_data: Dictionary) -> void:
+			if _loading:
+				return
+			row_data["label"] = t
+			_mark()).bind(ad))
+		top.add_child(lab)
+		var hrs := _spin(0, 8, 1, float(ad.get("hours", 0)))
+		hrs.name = "ItemHours"
+		hrs.suffix = "hr"
+		hrs.tooltip_text = "Hours. 1 reads (1 hr) on the Take button. 0 adds nothing."
+		hrs.value_changed.connect((func(v: float, row_data: Dictionary) -> void:
+			if _loading:
+				return
+			row_data["hours"] = int(v)
+			_mark()).bind(ad))
+		top.add_child(hrs)
+		var req := CheckBox.new()
+		req.name = "ItemRequired"
+		req.text = "Required"
+		req.tooltip_text = "Marks this item required. Leaving still uses the screen's require item, such as require:suit."
+		req.button_pressed = bool(ad.get("required", false))
+		req.toggled.connect((func(on: bool, row_data: Dictionary) -> void:
+			if _loading:
+				return
+			row_data["required"] = on
+			_mark()).bind(ad))
+		top.add_child(req)
+		top.add_child(_button("Remove", (func(row_data: Dictionary) -> void:
+			items.erase(row_data)
+			_mark()
+			_rebuild_act_editor()).bind(ad)))
+		row.add_child(top)
+		var detail := LineEdit.new()
+		detail.name = "ItemDetail"
+		detail.text = str(ad.get("detail", ""))
+		detail.placeholder_text = "Detail text (shown when the item is highlighted and as its hover tip)"
+		detail.text_changed.connect((func(t: String, row_data: Dictionary) -> void:
+			if _loading:
+				return
+			row_data["detail"] = t
+			_mark()).bind(ad))
+		row.add_child(detail)
 		act_box.add_child(row)
 
 

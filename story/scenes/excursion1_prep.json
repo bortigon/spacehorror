@@ -56,7 +56,6 @@
         "map_set_room:stasis_15",
         "map_unlock_door:stasis_15|ready_room",
         "map_know_room:ready_room",
-        "map_know_room:airlock",
         "map_know_door:ready_room|airlock",
         "map_know_door:ready_room|stbd_hold"
       ]
@@ -114,16 +113,14 @@
         ],
         "move_to": "ready_room",
         "move_prompt": "Please proceed to the READY ROOM.",
-        "on_arrive": [
-          "map_restrict_room:stbd_hold"
-        ],
+        "on_arrive": [],
         "goto": "next"
       }
     },
     {
       "id": "ready_room",
       "heading": "READY ROOM",
-      "text": "The locker is in front of you.\nEight hours on the bar. This room shows the cost. It does not spend them.\n[act=locker]LOCKER[/act]\nThe SUIT is required to leave. The LANTERN is light.",
+      "text": "[expo]You step into the ready room. There are several benches running along lockers that line the walls. [/expo]\n\nThe [act=locker]LOCKER[/act] is in front of you. A [act=coffee]COFFEE POT[/act] sits on the counter beside it.\nEight hours on the bar. Everything you do here costs hours, and they do not come back.\nTwo doors lead out. Both consoles glow orange.\n",
       "speed": 0,
       "shake": 0,
       "red": {
@@ -140,35 +137,83 @@
       "sfx": [],
       "question": "",
       "end": {
-        "type": "continue",
+        "type": "hold",
         "goto": "order:next",
-        "require": "suit"
+        "exit": "door:ready_room|airlock"
       },
       "acts": {
         "locker": {
-          "text": "The locker is in front of you.\nThe suit is required to leave. The lantern is light.\nEight hours on the bar. This room shows the cost. It does not spend them.",
-          "choices": [
+          "container": true,
+          "title": "LOCKER",
+          "text": "The locker is in front of you.\nThe suit is the sensible thing to take. The lantern is light.\nA keycard hangs on a hook inside.",
+          "grid": {
+            "cols": 3,
+            "rows": 3
+          },
+          "items": [
             {
+              "id": "suit",
               "label": "SUIT",
               "hours": 1,
-              "item": "suit",
-              "detail": "Required to leave.",
-              "required": true
+              "required": false,
+              "detail": "Pressure suit. Putting it on takes 1 hr.",
+              "actions": [
+                "take"
+              ]
             },
             {
+              "id": "lantern",
               "label": "LANTERN",
               "hours": 1,
-              "item": "lantern",
+              "required": false,
               "detail": "Light.",
-              "required": false
+              "actions": [
+                "take"
+              ]
+            },
+            {
+              "id": "airlock_keycard",
+              "label": "AIRLOCK KEYCARD",
+              "hours": 1,
+              "required": false,
+              "detail": "Opens the airlock door.",
+              "actions": [
+                "take"
+              ]
             }
-          ]
+          ],
+          "marker": {
+            "room": "ready_room",
+            "label": "LOCKER",
+            "rect": [
+              0.03,
+              0.05,
+              0.24,
+              0.17
+            ]
+          }
+        },
+        "coffee": {
+          "station": "coffee",
+          "title": "COFFEE POT",
+          "text": "A coffee pot sits on the counter beside the locker.",
+          "marker": {
+            "room": "ready_room",
+            "label": "COFFEE POT",
+            "rect": [
+              0.63,
+              0.05,
+              0.34,
+              0.17
+            ]
+          }
         }
       },
       "on_enter": [
         "map_set_room:ready_room",
-        "map_restrict_room:stbd_hold"
-      ]
+        "arm_hours"
+      ],
+      "tutorial": "items"
     }
   ]
 }

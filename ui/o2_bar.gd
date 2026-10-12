@@ -1,6 +1,7 @@
 class_name O2Bar
 extends Control
-## Header OXYGEN readout: "O2" + 20 tick segments + "NN%". Plex Mono, phosphor palette.
+## Header OXYGEN readout: 20 tick segments with "O2" and "NN%" BENEATH them. Plex Mono, phosphor palette.
+## The bar is BAR_H tall, the same as the hour blocks next to it (PdaScreen time_bar).
 ## danger 0 = calm (green, static). danger > 0 = amber -> red, glow pulse that speeds up,
 ## and a flash each time a tick drops. PdaScreen.set_o2() drives every registered bar.
 
@@ -10,6 +11,8 @@ const COL_AMBER := Color(0.93, 0.62, 0.3, 1)
 const COL_RED := Color(0.9, 0.18, 0.14, 1)
 const COL_EMPTY := Color(0.2, 0.3, 0.24, 0.55)
 const COL_LABEL := Color(0.56, 0.8, 0.6, 1)
+const BAR_H := 14.0        # bar height (the hour cells use the same)
+const TOTAL_H := 32.0      # bar + the label row under it
 
 var level := 100.0        # 0..100 as displayed
 var danger := 0.0         # 0..1
@@ -20,7 +23,7 @@ var _last_tick := TICKS
 
 
 func _init() -> void:
-	custom_minimum_size = Vector2(200, 16)
+	custom_minimum_size = Vector2(200, TOTAL_H)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 
@@ -58,8 +61,7 @@ func _draw() -> void:
 	if _font == null:
 		return
 	var fs := 12
-	var h := size.y
-	var base_y := h * 0.5 + fs * 0.36
+	var base_y := BAR_H + 2.0 + float(fs) + 1.0     # label baseline, under the bar
 	var pulse := 0.0
 	var col := COL_OK
 	if danger > 0.0:
@@ -68,11 +70,8 @@ func _draw() -> void:
 		col = col.lightened(0.35 * _flash + 0.15 * pulse * danger)
 	var label_col := COL_LABEL if danger <= 0.0 else col
 	draw_string(_font, Vector2(0, base_y), "O2", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, label_col)
-	var pct_w := 40.0
-	var x0 := 24.0
-	var x1 := size.x - pct_w - 6.0
-	draw_string(_font, Vector2(size.x - pct_w, base_y), percent_text(), HORIZONTAL_ALIGNMENT_RIGHT, pct_w, fs, label_col)
-	var bar := Rect2(x0, h * 0.5 - 5.0, x1 - x0, 10.0)
+	draw_string(_font, Vector2(size.x - 60.0, base_y), percent_text(), HORIZONTAL_ALIGNMENT_RIGHT, 60.0, fs, label_col)
+	var bar := Rect2(0.0, 0.0, size.x, BAR_H)
 	if danger > 0.0:
 		var glow := Color(col.r, col.g, col.b, (0.10 + 0.30 * pulse) * danger + 0.35 * _flash)
 		draw_rect(bar.grow(3.0), glow)

@@ -640,7 +640,7 @@ func test_panel() -> void:
 		check("panel: tip row = number, target dropdown, text", (row0.get_child(0) as Label).text == "1/7"
 			and str((row0.get_child(1) as OptionButton).get_item_metadata((row0.get_child(1) as OptionButton).selected)) == "map"
 			and (row0.get_child(2) as LineEdit).text.begins_with("This is your TRM-CUFF Map."))
-		check("panel: On arrival ops shown (map_restrict_room:stbd_hold)", panel.tour_arrive.text == "map_restrict_room:stbd_hold")
+		check("panel: On arrival ops empty (the RESTRICTED stamp now waits for the lock click)", panel.tour_arrive.text == "")
 		check("panel: not dirty after opening", not panel.dirty)
 		panel.tour_arrive.text_changed.emit("map_restrict_room:stbd_hold, map_know_room:airlock")
 		check("panel: editing On arrival writes a list", panel.data["screens"][1]["end"]["on_arrive"]
@@ -679,10 +679,32 @@ func test_panel() -> void:
 		check("panel: Interactable control, default tag locker", saw_act and panel.act_id_edit.text == "locker")
 		panel.select_screen(2)
 		await frames(1)
-		check("panel: ready room act is the locker function, suit then lantern", panel.act_box.get_child_count() == 2
-			and str(panel.data["screens"][2]["acts"]["locker"]["choices"][0]["item"]) == "suit"
-			and str(panel.data["screens"][2]["acts"]["locker"]["choices"][1]["item"]) == "lantern"
-			and str(panel.act_text_edit.text).contains("does not spend them"))
+		check("panel: ready room act is the locker container, suit, lantern, keycard rows", panel.act_box.get_child_count() == 3
+			and bool(panel.data["screens"][2]["acts"]["locker"]["container"])
+			and str(panel.data["screens"][2]["acts"]["locker"]["items"][0]["id"]) == "suit"
+			and str(panel.data["screens"][2]["acts"]["locker"]["items"][1]["id"]) == "lantern"
+			and str(panel.data["screens"][2]["acts"]["locker"]["items"][2]["id"]) == "airlock_keycard"
+			and str(panel.act_text_edit.text).contains("The locker is in front of you")
+			and str(panel.data["screens"][2]["acts"]["coffee"]["station"]) == "coffee")
+		check("panel: Container box ticked, title / grid fields shown, Back note hidden, button says Add item",
+			panel.act_container_check.button_pressed and panel.act_container_box.visible and panel.act_title_edit.text == "LOCKER"
+			and int(panel.act_cols_spin.value) == 3 and int(panel.act_rows_spin.value) == 3 and not panel.act_back_note.visible
+			and panel.act_add_button.text == "Add item")
+		var item_row: Node = panel.act_box.get_child(0)
+		check("panel: item row has id, label, hours, Required, detail",
+			item_row.find_child("ItemId", true, false) != null and (item_row.find_child("ItemLabel", true, false) as LineEdit).text == "SUIT"
+			and int((item_row.find_child("ItemHours", true, false) as SpinBox).value) == 1
+			and not (item_row.find_child("ItemRequired", true, false) as CheckBox).button_pressed
+			and (item_row.find_child("ItemDetail", true, false) as LineEdit).text.begins_with("Pressure suit."))
+		(item_row.find_child("ItemDetail", true, false) as LineEdit).text_changed.emit("Needed to go outside.")
+		panel.act_title_edit.text_changed.emit("LOCKER 1")
+		panel.act_cols_spin.value = 4
+		check("panel: editing detail / title / grid writes the data", str(panel.data["screens"][2]["acts"]["locker"]["items"][0]["detail"]) == "Needed to go outside."
+			and str(panel.data["screens"][2]["acts"]["locker"]["title"]) == "LOCKER 1"
+			and int(panel.data["screens"][2]["acts"]["locker"]["grid"]["cols"]) == 4)
+		(item_row.find_child("ItemDetail", true, false) as LineEdit).text_changed.emit("Required to leave.")
+		panel.act_title_edit.text_changed.emit("LOCKER")
+		panel.act_cols_spin.value = 3
 		var saw_back := false
 		var note_stack: Array = [panel]
 		while not note_stack.is_empty():
@@ -701,10 +723,40 @@ func test_panel() -> void:
 		panel.text_edit.text = kept
 		panel._set_screen("text", kept)
 		panel._add_act_action()
-		check("panel: Add option writes a choice", (panel.data["screens"][2]["acts"]["locker"]["choices"] as Array).size() == 3)
-		var actions: Array = panel.data["screens"][2]["acts"]["locker"]["choices"]
+		check("panel: Add item writes a container item", (panel.data["screens"][2]["acts"]["locker"]["items"] as Array).size() == 4
+			and str(panel.data["screens"][2]["acts"]["locker"]["items"][3]["actions"]) == "[\"take\"]")
+		var actions: Array = panel.data["screens"][2]["acts"]["locker"]["items"]
 		actions.pop_back()
 		panel._rebuild_act_editor()
+		check("panel: saved JSON keeps the container shape", SceneData.to_json(panel.data).contains("\"container\": true")
+			and SceneData.to_json(panel.data).contains("\"items\"") and not SceneData.to_json(panel.data).contains("\"choices\""))
+		# a plain function act on another screen: Back note + Add option, then convert to a container and back
+		panel.select_screen(0)
+		await frames(1)
+		panel.act_id_edit.text = "crate"
+		panel._add_act_action()
+		await frames(1)
+		var crate: Dictionary = panel.data["screens"][0]["acts"]["crate"]
+		check("panel: a new act is a function: Back note shown, no container fields, Add option", not crate.has("container")
+			and (crate["choices"] as Array).size() == 1 and panel.act_back_note.visible and not panel.act_container_box.visible
+			and panel.act_add_button.text == "Add option" and not panel.act_container_check.button_pressed)
+		panel.act_container_check.button_pressed = true
+		await frames(1)
+		crate = panel.data["screens"][0]["acts"]["crate"]
+		check("panel: ticking Container converts the option to an item and shows the window fields", bool(crate["container"])
+			and not crate.has("choices") and (crate["items"] as Array).size() == 1 and str(crate["items"][0]["label"]) == "Option"
+			and panel.act_container_box.visible and not panel.act_back_note.visible and panel.act_box.get_child_count() == 1)
+		panel.act_container_check.button_pressed = false
+		await frames(1)
+		crate = panel.data["screens"][0]["acts"]["crate"]
+		check("panel: unticking converts back to a function (no data lost)", not crate.has("container") and not crate.has("items")
+			and (crate["choices"] as Array).size() == 1 and panel.act_back_note.visible)
+		(panel.data["screens"][0]["acts"] as Dictionary).erase("crate")
+		if (panel.data["screens"][0]["acts"] as Dictionary).is_empty():
+			(panel.data["screens"][0] as Dictionary).erase("acts")
+		panel.act_id_edit.text = "locker"
+		panel.select_screen(2)
+		await frames(1)
 		check("panel: ERROR level runs from Level 0 to Level 10", panel.error_level.get_item_text(0) == "Level 0"
 			and panel.error_level.get_item_text(10) == "Level 10" and panel.error_level.item_count == 11)
 		check("panel: default ERROR tag is unchanged", panel._error_open("") == "[error]" and panel._error_open("ERROR") == "[error=ERROR]")

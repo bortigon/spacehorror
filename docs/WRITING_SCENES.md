@@ -38,7 +38,7 @@ Tags that work, the same ones printed under the box:
 | `[error=ERROR]name[/error]` | "name" stays readable, then becomes ERROR |
 | `[error=DEMON delay=1.5]voice[/error]` | "voice" stays readable for 1.5 seconds, then becomes DEMON |
 | `[expo]The room is cold.[/expo]` | that sentence in the exposition serif (IBM Plex Serif) |
-| `[act=locker]LOCKER[/act]` | that word is clickable. It opens the menu named on the screen |
+| `[act=locker]LOCKER[/act]` | that word is clickable. It opens the act named on the screen: a text swap with options and Back, or a container window |
 | `[shake]text[/shake]` | that text shakes |
 | `[pause=1.0]` | typing waits 1 second |
 | `[b]bold[/b]` `[i]italic[/i]` | bold, italic |
@@ -48,6 +48,8 @@ Tags that work, the same ones printed under the box:
 There are buttons for the common tags: **ERROR glitch**, **Level** (0–10), a delay in seconds, **Becomes:**, **Shake**, **Pause**, **Bold**, **Italic**, **Exposition**, **Interactable**, **Remove effects**. Select the words first. **Exposition** is for describing a room before dialogue or an action.
 
 **Interactable** wraps the selection as `[act=id]...[/act]`. The id box next to the button is the tag (default `locker`). **Add action** writes that id's menu onto the screen: a label, an hour cost, an item id, and **Required**. In play, clicking the word opens those actions. Finishing one marks it done. The hour number is shown on the button. It spends blocks only after a later scene arms the hour bar. Put the suit on the locker with **Required** if the screen's continue ending has `require` set to that item.
+
+**Container** (tick the box in the ACT section) turns an act into a window instead of a text swap. Clicking the green word opens a window in the middle of the screen with the character screen beside it. Window title is the name at the top-left, the act's text is the description under it (the left quarter of the window), and **Grid** is how many columns and rows of cells the window has. **Add item** adds a row: **id** (the inventory item and its `has_<id>` flag), **label** (the name on the cell and the button), **hours**, **Required**, and a **detail** line (shown when the item is highlighted, and as its hover tip). The player clicks an item and presses **Take LABEL (1 hr)**, or drags it onto the character screen. The hour cost is shown, and only spent after a later scene arms the hour bar. EXIT, the X on the character screen, or Esc closes it. Back is not used for containers. Untick the box to turn it back into the old text-swap act.
 
 **Pinned question** is optional. After the player answers, the next screen shows that question and their answer at the top. If you leave it blank, the game uses the last line of this screen.
 

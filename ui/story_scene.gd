@@ -23,6 +23,10 @@ const TOUR_TARGETS: Array[String] = ["map", "rooms"]
 const RED_MODES: Array[String] = ["off", "static", "ramp"]
 const DEFAULT_SPEED := 40
 const DEFAULT_QTE_LABEL := "NO WAIT, I UNDERSTAND"
+## Container window grid defaults / limit (cols and rows each).
+const CONTAINER_COLS := 3
+const CONTAINER_ROWS := 3
+const CONTAINER_MAX := 8
 
 const _Markup := preload("res://ui/story_markup.gd")
 const _Vessel := preload("res://data/vessel.gd")
@@ -236,7 +240,11 @@ static func normalize_end(e: Dictionary) -> Dictionary:
 			return {"type": t, "tips": tips, "move_to": str(e.get("move_to", "")).strip_edges(),
 				"move_prompt": str(e.get("move_prompt", "")), "on_arrive": arrive, "goto": str(e.get("goto", "next"))}
 		"hold":
-			return {"type": t, "goto": str(e.get("goto", ""))}
+			var hold := {"type": t, "goto": str(e.get("goto", ""))}
+			# "exit": "door:a|b" = the scene is left by clicking that (unlocked) door on the map
+			if str(e.get("exit", "")).strip_edges() != "":
+				hold["exit"] = str(e.get("exit", "")).strip_edges()
+			return hold
 		"transition":
 			return {"type": t, "card": str(e.get("card", "")), "goto": str(e.get("goto", "next"))}
 	var cont := {"type": "continue", "goto": str(e.get("goto", "next"))}
@@ -274,6 +282,10 @@ static func normalize_acts(raw: Variant) -> Dictionary:
 
 
 static func _normalize_act_body(a: Dictionary) -> Dictionary:
+	if str(a.get("station", "")).strip_edges() != "":
+		return _normalize_station(a)
+	if bool(a.get("container", false)):
+		return _normalize_container(a)
 	var choices: Array = []
 	var rc: Variant = a.get("choices", a.get("actions", []))
 	if rc is Array:
@@ -281,6 +293,91 @@ static func _normalize_act_body(a: Dictionary) -> Dictionary:
 			if c is Dictionary:
 				choices.append(_normalize_act_choice(c))
 	return {"text": str(a.get("text", "")), "choices": choices}
+
+
+## A station act ("station": "coffee") opens a code-defined window (ui/station_window.gd) with a
+## picture and options. The scene only gives it a title, a description and (optionally) a map marker.
+##   {"station": "coffee", "title": "COFFEE POT", "text": "...", "marker": {"room": "ready_room", "label": "COFFEE POT", "rect": [x, y, w, h]}}
+static func _normalize_station(a: Dictionary) -> Dictionary:
+	var out := {"station": sanitize_id(str(a.get("station", ""))), "title": str(a.get("title", "")),
+		"text": str(a.get("text", ""))}
+	for k: Variant in a:
+		if not out.has(k) and k != "choices" and k != "actions" and k != "container" and k != "items" and k != "grid":
+			out[k] = a[k]
+	return out
+
+
+## A container act opens the window (ui/container_window.gd) instead of replacing the screen text.
+##   {"container": true, "title": "LOCKER", "text": "description", "grid": {"cols": 3, "rows": 3},
+##    "items": [{"id": "suit", "label": "SUIT", "hours": 1, "required": true, "detail": "...", "actions": ["take"]}]}
+## A container written with the old "choices" list (no "items") is converted, one item per choice.
+static func _normalize_container(a: Dictionary) -> Dictionary:
+	var g: Dictionary = a.get("grid", {}) if a.get("grid", {}) is Dictionary else {}
+	var items: Array = []
+	var raw: Variant = a.get("items", null)
+	if not (raw is Array):
+		raw = a.get("choices", a.get("actions", []))
+	if raw is Array:
+		for it: Variant in raw:
+			if it is Dictionary:
+				items.append(normalize_container_item(it))
+	var out := {
+		"container": true,
+		"title": str(a.get("title", "")),
+		"text": str(a.get("text", "")),
+		"grid": {"cols": clampi(int(_num(g.get("cols", CONTAINER_COLS), CONTAINER_COLS)), 1, CONTAINER_MAX),
+			"rows": clampi(int(_num(g.get("rows", CONTAINER_ROWS), CONTAINER_ROWS)), 1, CONTAINER_MAX)},
+		"items": items,
+	}
+	for k: Variant in a:
+		if not out.has(k) and k != "choices" and k != "actions":
+			out[k] = a[k]
+	return out
+
+
+## One container item. "id" falls back to the label (or the old choice's "item"); "actions" defaults to ["take"].
+static func normalize_container_item(c: Dictionary) -> Dictionary:
+	var label := str(c.get("label", "")).strip_edges()
+	var id := sanitize_id(str(c.get("id", c.get("item", ""))))
+	if id == "":
+		id = sanitize_id(label)
+	if label == "":
+		label = id.to_upper()
+	var actions: Array = []
+	var ra: Variant = c.get("actions", null)
+	if ra is Array:
+		for x: Variant in ra:
+			var aid := sanitize_id(str(x))
+			if aid != "" and not actions.has(aid):
+				actions.append(aid)
+	else:
+		actions = ["take"]
+	var out := {
+		"id": id,
+		"label": label,
+		"hours": maxi(0, int(_num(c.get("hours", 0), 0))),
+		"required": bool(c.get("required", false)),
+		"detail": str(c.get("detail", "")),
+		"actions": actions,
+	}
+	for k: Variant in c:
+		if not out.has(k) and k != "item":
+			out[k] = c[k]
+	return out
+
+
+## The old function form of a container (replacement text + one option per item). Used where there
+## is no window to show (the Scene Writer preview): the act still reads and works.
+static func container_as_function(spec: Dictionary) -> Dictionary:
+	var choices: Array = []
+	for it: Variant in spec.get("items", []):
+		if it is Dictionary and "take" in ((it as Dictionary).get("actions", ["take"]) as Array):
+			choices.append({"label": str((it as Dictionary).get("label", "")),
+				"hours": int((it as Dictionary).get("hours", 0)),
+				"item": str((it as Dictionary).get("id", "")),
+				"detail": str((it as Dictionary).get("detail", "")),
+				"required": bool((it as Dictionary).get("required", false))})
+	return {"text": str(spec.get("text", "")), "choices": choices}
 
 
 static func _normalize_act_choice(c: Dictionary) -> Dictionary:
@@ -354,6 +451,7 @@ static func validate(src: Dictionary, known_scenes: PackedStringArray = PackedSt
 		var m = _Markup.new().parse(str(s["text"]))
 		for w: String in m.warnings:
 			out.append(_p("warning", i, "%s: %s." % [name, w]))
+		_check_containers(out, i, name, s)
 		var vo: Dictionary = s["vo"]
 		var clip := str(vo["clip"])
 		if clip != "":
@@ -416,6 +514,34 @@ static func validate(src: Dictionary, known_scenes: PackedStringArray = PackedSt
 				if not last:
 					out.append(_p("warning", i, "%s holds (ends the scene) but is not the last screen." % name))
 	return out
+
+
+## Container acts: items exist, ids are unique, the grid has room for them.
+static func _check_containers(out: Array, i: int, name: String, s: Dictionary) -> void:
+	var acts: Variant = s.get("acts", {})
+	if not (acts is Dictionary):
+		return
+	for aid: Variant in (acts as Dictionary):
+		var a: Dictionary = (acts as Dictionary)[aid]
+		if not bool(a.get("container", false)):
+			continue
+		if str(a.get("station", "")) != "":
+			continue
+		var items: Array = a.get("items", [])
+		var g: Dictionary = a.get("grid", {})
+		if items.is_empty():
+			out.append(_p("warning", i, "%s: container \"%s\" has no items." % [name, aid]))
+		var cap := int(g.get("cols", CONTAINER_COLS)) * int(g.get("rows", CONTAINER_ROWS))
+		if items.size() > cap:
+			out.append(_p("warning", i, "%s: container \"%s\" has %d items but the grid only has %d cells." % [name, aid, items.size(), cap]))
+		var seen := {}
+		for it: Dictionary in items:
+			var iid := str(it.get("id", ""))
+			if iid == "":
+				out.append(_p("warning", i, "%s: a container item in \"%s\" has no id." % [name, aid]))
+			elif seen.has(iid):
+				out.append(_p("warning", i, "%s: container \"%s\" has two items called \"%s\"." % [name, aid, iid]))
+			seen[iid] = true
 
 
 ## Map walkthrough: tips with text, targets that exist on the ship map, move_to a room.

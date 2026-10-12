@@ -23,6 +23,7 @@ func frames(n: int) -> void:
 
 
 func _init() -> void:
+	PdaScreen.tutorials_enabled = false
 	await frames(1)
 	pda = (load(SCENE) as PackedScene).instantiate()
 	root.add_child(pda)
@@ -32,70 +33,62 @@ func _init() -> void:
 	await frames(2)
 	pda.stage.skip_typing(true)
 	await frames(2)
-	check("ready room: 8 blocks visible, spend refused", pda.time_bar.visible and pda.time_blocks == 8
-		and not pda.time_blocks_live and pda.spend_time_blocks(1) == false and pda.time_blocks == 8)
+	check("ready room: 8 blocks visible and LIVE (the room arms them), a cost can be spent", pda.time_bar.visible and pda.time_blocks == 8
+		and pda.time_blocks_live and pda.hours_refusal(1) == "")
 	var shown: String = pda.stage.text_label.get_parsed_text()
 	var bb: String = pda.stage.text_label.text
-	check("ready room: locker word is bold capitals, underline has no leading space",
-		shown.contains("LOCKER") and shown.contains("does not spend them")
-		and bb.contains("[url href=act:locker underline=never]") and not bb.contains("[url=")
-		and bb.contains("[b][u]LOCKER[/u][/b]") and not bb.contains("[u] "))
-	pda.stage.continue_button.pressed.emit()
-	await frames(2)
-	check("without the suit, continue stays", pda.screen_index == 2 and pda.stage.heading_label.text == "READY ROOM"
-		and pda.os_line_label.text.contains("SUIT REQUIRED")
-		and not str(pda.stage.text_label.get_parsed_text()).contains("isn't written"))
+	check("ready room: locker + coffee pot words are bold capitals, underline has no leading space, old cost line gone",
+		shown.contains("LOCKER") and shown.contains("COFFEE POT") and not shown.contains("does not spend")
+		and bb.contains("[url href=act:locker underline=never]") and bb.contains("[url href=act:coffee underline=never]")
+		and not bb.contains("[url=") and bb.contains("[b][u]LOCKER[/u][/b]") and not bb.contains("[u] "))
+	check("ready room: no CONTINUE button, nothing about SUIT REQUIRED", not pda.stage.continue_button.visible
+		and not pda.os_line_label.text.contains("SUIT REQUIRED"))
+	pda._ensure_windows()
+	pda.windows.set_animated(false)
 	pda.stage.open_act("locker")
-	pda.stage.skip_typing(true)
 	await frames(2)
-	var labels: Array = []
-	for b in pda.stage.choice_buttons:
-		labels.append((b as Button).text)
-	check("locker replaces the screen: suit, lantern, Back",
-		str(pda.stage.text_label.get_parsed_text()).contains("The locker is in front of you")
-		and labels.size() == 3
-		and str(labels[0]) == "SUIT (1 hr)"
-		and str(labels[1]) == "LANTERN (1 hr)"
-		and str(labels[2]) == "Back"
-		and pda.stage.choice_buttons[0].custom_minimum_size.is_equal_approx(Vector2(220, 34)))
-	pda.stage.choice_buttons[2].pressed.emit()
-	pda.stage.skip_typing(true)
+	var cont = pda.windows.container
+	var chr = pda.windows.character
+	check("locker opens the container window + character screen (no replacement text, no Back list)",
+		pda.windows.container_open() and pda.windows.character_open() and cont.title_label.text == "LOCKER"
+		and cont.find_item("suit")["label"] == "SUIT" and cont.find_item("lantern")["hours"] == 1
+		and cont.find_item("airlock_keycard")["label"] == "AIRLOCK KEYCARD" and cont.find_item("airlock_keycard")["hours"] == 1
+		and pda.stage.choice_buttons.size() == 0)
+	cont.exit_button.pressed.emit()
 	await frames(2)
-	check("Back restores the ready room text", pda.screen_index == 2
-		and str(pda.stage.text_label.get_parsed_text()).contains("does not spend them")
-		and str(pda.stage.text_label.get_parsed_text()).contains("LOCKER")
-		and pda.stage.continue_button.visible)
+	check("EXIT returns to the ready room text", not pda.windows.any_open() and pda.screen_index == 2
+		and str(pda.stage.text_label.get_parsed_text()).contains("LOCKER"))
 	pda.stage.open_act("locker")
-	pda.stage.skip_typing(true)
 	await frames(2)
-	pda.stage.choice_buttons[0].pressed.emit()
+	cont.select_id("suit")
+	cont.action_buttons[0].pressed.emit()
 	await frames(2)
-	check("suit taken, hours still 8, row marked taken", pda.inventory.has(&"suit") and pda.time_blocks == 8
-		and pda.stage.choice_buttons[0].disabled
-		and str(pda.stage.choice_buttons[0].text).contains("already taken"))
-	pda.stage.choice_buttons[1].pressed.emit()
+	check("suit taken: 1 hr spent (8 -> 7), cell empty", pda.inventory.has(&"suit") and pda.time_blocks == 7
+		and cont.slot_for("suit") == null and cont.find_item("suit")["taken"])
+	cont.select_id("lantern")
+	cont.action_buttons[0].pressed.emit()
 	await frames(2)
-	check("lantern taken, hours still not spent", pda.inventory.has(&"lantern") and pda.time_blocks == 8)
+	check("lantern taken: another hr (7 -> 6), flags set", pda.inventory.has(&"lantern") and pda.time_blocks == 6
+		and pda.has_flag("has_suit") and pda.has_flag("has_lantern"))
+	pda.windows.close_all(true)
 	pda.show_inv()
 	await frames(2)
 	var tip := ""
 	var saw_lantern := false
-	for b in pda.inv_grid.get_children():
-		if b is Button and (b as Button).text == "SUIT":
-			tip = (b as Button).tooltip_text
-			(b as Button).pressed.emit()
-		if b is Button and (b as Button).text == "LANTERN":
+	for s2: Control in chr.slots:
+		if not s2.item.is_empty() and str(s2.item["label"]) == "SUIT":
+			tip = s2.tooltip_text
+			s2.pressed.emit(s2)
+		if not s2.item.is_empty() and str(s2.item["label"]) == "LANTERN":
 			saw_lantern = true
-	check("INV grid: placeholders plus suit and lantern, tooltip on click", pda.inv_grid.get_child_count() == 6
-		and pda.inv_view.visible and saw_lantern and tip.contains("Required to leave")
-		and pda.inv_detail.text.contains("Required to leave"))
-	pda.arm_time_blocks()
-	var spent: bool = pda.spend_time_blocks(1)
+	check("INV opens the character screen: only what was taken (suit, lantern), tooltip + detail on click",
+		pda.windows.character_open() and chr.slots.size() == 15 and chr.filled_ids().size() == 2
+		and saw_lantern and tip.contains("Pressure suit") and chr.desc_body.text.contains("Pressure suit"))
 	var dim := 0
 	for c in pda.time_bar.get_children():
 		if c is ColorRect and (c as ColorRect).color.g < 0.3:
 			dim += 1
-	check("armed bar spends one block", pda.time_blocks_live and spent and pda.time_blocks == 7 and dim == 1)
+	check("the bar shows the 2 spent blocks dim", dim == 2 and pda.time_count_label.text == "6/8")
 	pda.queue_free()
 	await frames(2)
 	print("INV %d pass, %d fail" % [passes, fails])

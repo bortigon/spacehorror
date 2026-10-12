@@ -123,6 +123,8 @@ signal died(message: String)
 signal death_retried
 ## Click-to-move on the full map moved the player to room_id (see map_try_move).
 signal map_moved(room_id: String)
+## An unlocked door the scene listed as clickable ("click_doors") was clicked on a map ("a|b").
+signal map_door_activated(key: String)
 
 enum Tab { LOG, DECK, LOCKER, KIT }
 
@@ -184,18 +186,30 @@ const TIME_BLOCK_MAX := 8
 var time_blocks := TIME_BLOCK_MAX
 var time_blocks_live := false
 var excursion_chrome := false
-var time_bar: HBoxContainer
+var time_bar: HBoxContainer          # the 8 hour cells (same height as the O2 bar)
+var time_box: VBoxContainer          # time_bar + the "HRS" caption beneath it
+var time_caption: Label
+var time_count_label: Label
 var inv_button: Button
-var inv_view: Control
-var inv_grid: GridContainer
-var inv_detail: Label
-const INV_PLACEHOLDERS := [
-	{"id": "sealant", "label": "SEALANT", "desc": "Not issued."},
-	{"id": "ration", "label": "RATION", "desc": "Not issued."},
-	{"id": "patch", "label": "PATCH", "desc": "Not issued."},
-	{"id": "tape", "label": "TAPE", "desc": "Not issued."},
-]
-const TAB_INV := 4
+## Character / inventory screen + container windows (ui/window_manager.gd). Made on first use.
+var windows: Control
+const WindowManagerScript := preload("res://ui/window_manager.gd")
+const ConfirmScript := preload("res://ui/confirm_box.gd")
+## The character screen starts COMPLETELY EMPTY (the old dim SEALANT / RATION / PATCH / TAPE
+## placeholders are gone). Kept as an empty constant for old callers.
+const INV_PLACEHOLDERS := []
+## Item ids that get a "Put on" button in the character screen (everything gets "Drop").
+const WEARABLE_IDS: Array[String] = ["suit"]
+const SUIT_ID := &"suit"
+const ZIPPER_SFX := "res://assets/sounds/zipper.wav"
+const ERROR_SFX := "res://assets/sounds/error.wav"
+const UNLOCK_SFX := "res://assets/sounds/unlock.wav"
+const FLOOR_ACT := "floor"
+## Dropped items: this many cells along the bottom of a room; more than this become one PILE marker.
+const DROP_SLOTS := 3
+const SUIT_FADE_IN := 0.32
+const SUIT_FADE_HOLD := 0.22
+const SUIT_FADE_OUT := 0.45
 var current_id: StringName = &""
 var current_tab: int = Tab.LOG
 var locked_tabs: Dictionary = {}
@@ -273,6 +287,16 @@ var _o2_tween: Tween
 var _extra_maps: Array[ShipMapView] = []
 var _mini_map: ShipMapView
 var _full_map: ShipMapView
+var _mini_banner: Label               # error / info line over the minimap ("Requires Airlock Keycard")
+var _mini_banner_token := 0
+var map_last_error := ""
+var confirm_box: Control              # Yes / No prompt (ui/confirm_box.gd)
+var guide_tour: Control               # inventory walkthrough overlay (ui/guide_tour.gd)
+var _suit_fade: ColorRect
+var _suit_busy := false
+var _file_sfx: Dictionary = {}
+## Tutorials (guided walkthroughs) can be switched off, e.g. by the headless tests.
+static var tutorials_enabled := true
 var _link_hovering := false
 # death screen
 var death_screen: Control
@@ -686,6 +710,9 @@ func run_op(op: Variant) -> void:
 			map_restrict_room(StringName(arg), true)
 		"map_unrestrict_room":
 			map_restrict_room(StringName(arg), false)
+		"arm_hours":
+			if not time_blocks_live:   # idempotent: re-entering the room never refills the hours
+				arm_time_blocks()
 		"o2_full":
 			stop_o2_tween()
 			set_o2(100.0, 0.0)
@@ -748,8 +775,8 @@ func give_item(id: StringName) -> void:
 	flags["has_" + str(id)] = true
 	if current_tab == Tab.KIT:
 		_rebuild_kit()
-	if current_tab == TAB_INV:
-		_rebuild_inv()
+	if windows != null:
+		windows.refresh()
 
 
 func take_item(id: StringName) -> void:
@@ -889,10 +916,6 @@ func show_tab(tab: int, click := false) -> void:
 	if click:
 		play_sfx(&"tap")
 	current_tab = tab
-	if inv_view:
-		inv_view.hide()
-	if inv_button:
-		inv_button.theme_type_variation = &"TabButton"
 	log_view.visible = tab == Tab.LOG
 	deck_view.visible = tab == Tab.DECK
 	locker_view.visible = tab == Tab.LOCKER
@@ -936,6 +959,7 @@ func set_excursion_chrome(on: bool) -> void:
 		return
 	_ensure_time_bar()
 	_ensure_inv()
+	time_box.visible = on
 	time_bar.visible = on
 	inv_button.visible = on
 	for i in [Tab.DECK, Tab.LOCKER, Tab.KIT]:
@@ -946,10 +970,8 @@ func set_excursion_chrome(on: bool) -> void:
 			show_tab(Tab.LOG)
 	else:
 		journal_button.tooltip_text = "Locker (L)"
-		if inv_view:
-			inv_view.hide()
-		if current_tab == TAB_INV:
-			show_tab(Tab.LOG)
+		if windows != null:
+			windows.close_all(true)
 	_refresh_time_bar()
 
 
@@ -959,7 +981,8 @@ func arm_time_blocks() -> void:
 	_refresh_time_bar()
 
 
-## Returns false until a later scene calls arm_time_blocks(). The bar still shows the cost.
+## Returns false until a scene calls arm_time_blocks() (or "arm_hours"), and when the cost is more
+## than what is left. API unchanged: it only ever spends, never goes below zero.
 func spend_time_blocks(n: int) -> bool:
 	if not time_blocks_live or n < 1 or n > time_blocks:
 		return false
@@ -968,27 +991,76 @@ func spend_time_blocks(n: int) -> bool:
 	return true
 
 
+## "" if an action costing n hours can happen now, else a short message for the player. Costs are
+## only enforced once the hour blocks are live (the ready room arms them). 0 left = "NO HOURS LEFT".
+## Running out has no game-over rule yet: every action that costs hours is simply refused.
+func hours_refusal(n: int) -> String:
+	if n < 1 or not time_blocks_live:
+		return ""
+	if time_blocks <= 0:
+		return "NO HOURS LEFT"
+	if n > time_blocks:
+		return "NOT ENOUGH HOURS: %d LEFT" % time_blocks
+	return ""
+
+
+## Spends n hours for an action that is allowed (call hours_refusal first). True once they are spent
+## (also true for a free action, or while the blocks are not live yet).
+func spend_hours(n: int) -> bool:
+	if n < 1 or not time_blocks_live:
+		return true
+	return spend_time_blocks(n)
+
+
+func hours_left() -> int:
+	return time_blocks
+
+
+## Builds the hour blocks: 8 cells (the same height as the O2 bar) with an "HRS" caption BENEATH them.
 func _ensure_time_bar() -> void:
 	if time_bar:
 		return
+	var mono: Font = load("res://assets/fonts/IBMPlexMono-SemiBold.ttf")
+	time_box = VBoxContainer.new()
+	time_box.name = "TimeBox"
+	time_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	time_box.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	time_box.add_theme_constant_override("separation", 2)
+	time_box.custom_minimum_size = Vector2(0, O2Bar.TOTAL_H)
 	time_bar = HBoxContainer.new()
 	time_bar.name = "TimeBlocks"
 	time_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	time_bar.add_theme_constant_override("separation", 3)
-	time_bar.alignment = BoxContainer.ALIGNMENT_CENTER
-	var cap := Label.new()
-	cap.text = "HRS"
-	cap.theme_type_variation = &"OsLabelDim"
-	cap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	time_bar.add_child(cap)
+	time_bar.alignment = BoxContainer.ALIGNMENT_BEGIN
 	for _i in TIME_BLOCK_MAX:
 		var cell := ColorRect.new()
-		cell.custom_minimum_size = Vector2(10, 16)
+		cell.custom_minimum_size = Vector2(10, O2Bar.BAR_H)
 		cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		time_bar.add_child(cell)
+	time_box.add_child(time_bar)
+	var row := HBoxContainer.new()
+	row.name = "TimeCaptionRow"
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	time_caption = Label.new()
+	time_caption.name = "TimeCaption"
+	time_caption.text = "HRS"
+	time_caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	time_caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	time_count_label = Label.new()
+	time_count_label.name = "TimeCount"
+	time_count_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	time_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	for l: Label in [time_caption, time_count_label]:
+		l.add_theme_font_override("font", mono)
+		l.add_theme_font_size_override("font_size", 12)
+		l.add_theme_color_override("font_color", O2Bar.COL_LABEL)
+		l.custom_minimum_size = Vector2(0, O2Bar.TOTAL_H - O2Bar.BAR_H - 2.0)
+	row.add_child(time_caption)
+	row.add_child(time_count_label)
+	time_box.add_child(row)
 	var header := hourglass.get_parent()
-	header.add_child(time_bar)
-	header.move_child(time_bar, hourglass.get_index())
+	header.add_child(time_box)
+	header.move_child(time_box, hourglass.get_index())
 	_refresh_time_bar()
 
 
@@ -1000,10 +1072,13 @@ func _refresh_time_bar() -> void:
 		if c is ColorRect:
 			(c as ColorRect).color = Color(0.45, 0.82, 0.48) if i < time_blocks else Color(0.12, 0.16, 0.13)
 			i += 1
+	if time_count_label:
+		time_count_label.text = "%d/%d" % [time_blocks, TIME_BLOCK_MAX]
 
 
+## The INV tab. It opens the character screen (a window), it is not a page of its own.
 func _ensure_inv() -> void:
-	if inv_view:
+	if inv_button:
 		return
 	var tabs := tab_buttons[0].get_parent()
 	inv_button = Button.new()
@@ -1016,88 +1091,59 @@ func _ensure_inv() -> void:
 	inv_button.pressed.connect(show_inv)
 	tabs.add_child(inv_button)
 	tabs.move_child(inv_button, tab_buttons[0].get_index() + 1)
-	inv_view = PanelContainer.new()
-	inv_view.name = "InvView"
-	inv_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	inv_view.mouse_filter = Control.MOUSE_FILTER_STOP
-	var box_style := StyleBoxFlat.new()
-	box_style.bg_color = Color(0.015, 0.04, 0.02, 0.94)
-	box_style.border_color = Color(0.44, 0.75, 0.45)
-	box_style.set_border_width_all(1)
-	box_style.set_content_margin_all(12)
-	inv_view.add_theme_stylebox_override("panel", box_style)
-	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 8)
-	col.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	inv_view.add_child(col)
-	var head := Label.new()
-	head.text = "INV"
-	head.theme_type_variation = &"TitleLabel"
-	col.add_child(head)
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	col.add_child(scroll)
-	inv_grid = GridContainer.new()
-	inv_grid.columns = 4
-	inv_grid.add_theme_constant_override("h_separation", 8)
-	inv_grid.add_theme_constant_override("v_separation", 8)
-	inv_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(inv_grid)
-	inv_detail = Label.new()
-	inv_detail.theme_type_variation = &"OsLabel"
-	inv_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	inv_detail.text = ""
-	col.add_child(inv_detail)
-	log_view.get_parent().add_child(inv_view)
-	inv_view.hide()
 
 
+## The window layer (character screen + container windows), above the story and the map, under the pause menu.
+func _ensure_windows() -> void:
+	if windows != null:
+		return
+	windows = WindowManagerScript.new()
+	windows.setup(self)
+	add_child(windows)
+	move_child(windows, pause_menu.get_index())
+	windows.item_taken.connect(_on_container_item_taken)
+	windows.character_changed.connect(_on_character_changed)
+	windows.afford_cb = hours_refusal
+	windows.item_actions_cb = char_item_actions
+	windows.character_action.connect(_on_character_action)
+	windows.station_option.connect(_on_station_option)
+
+
+func _on_character_changed(open: bool) -> void:
+	if inv_button:
+		inv_button.theme_type_variation = &"TabButtonActive" if open else &"TabButton"
+
+
+## A container window gave an item away. Chapters override this (authored_scene.gd adds hours + flags).
+func _on_container_item_taken(act_id: String, item: Dictionary) -> void:
+	var id := str(item.get("id", ""))
+	if id == "":
+		return
+	if act_id == FLOOR_ACT:
+		pickup_dropped(id)   # from the floor window: the id is the drop's uid
+		return
+	mark_item_taken(id)
+	var prev: Dictionary = items.get(StringName(id), {})
+	prev["label"] = str(item.get("label", id))
+	prev["desc"] = str(item.get("detail", ""))
+	items[StringName(id)] = prev
+	give_item(StringName(id))
+	var hrs := int(item.get("hours", 0))
+	if hrs > 0:
+		spend_hours(hrs)
+
+
+## INV tab / journal button / TAB, C, I: show or hide the character screen.
 func show_inv() -> void:
 	if not excursion_chrome:
 		return
-	_ensure_inv()
-	current_tab = TAB_INV
-	log_view.hide()
-	deck_view.hide()
-	locker_view.hide()
-	kit_view.hide()
-	inv_view.show()
-	inv_button.theme_type_variation = &"TabButtonActive"
-	_refresh_tab_buttons()
-	_rebuild_inv()
-	os_line_label.text = _current_os_line()
+	_ensure_windows()
+	windows.toggle_character()
 
 
-func _rebuild_inv() -> void:
-	if inv_grid == null:
-		return
-	for c in inv_grid.get_children():
-		c.queue_free()
-	var seen := {}
-	for ph: Dictionary in INV_PLACEHOLDERS:
-		seen[str(ph["id"])] = true
-		var owned := StringName(str(ph["id"])) in inventory
-		var desc := str(items.get(StringName(str(ph["id"])), {}).get("desc", ph["desc"])) if owned else str(ph["desc"])
-		_add_inv_cell(str(ph["label"]), desc, owned)
-	for id in inventory:
-		if seen.has(str(id)):
-			continue
-		var it: Dictionary = items.get(id, {})
-		_add_inv_cell(str(it.get("label", id)), str(it.get("desc", "")), true)
-
-
-func _add_inv_cell(label: String, desc: String, owned: bool) -> void:
-	var b := Button.new()
-	b.theme_type_variation = &"ChoiceButton"
-	b.custom_minimum_size = Vector2(120, 72)
-	b.focus_mode = Control.FOCUS_NONE
-	b.text = label
-	b.tooltip_text = label if desc == "" else "%s\n%s" % [label, desc]
-	b.modulate = Color(1, 1, 1, 1) if owned else Color(1, 1, 1, 0.45)
-	b.pressed.connect(func() -> void:
-		inv_detail.text = b.tooltip_text.replace("\n", " — "))
-	inv_grid.add_child(b)
+## True while the character screen or a container window is up (story input is blocked then).
+func windows_open() -> bool:
+	return windows != null and windows.any_open()
 
 
 # ---------------------------------------------------------------- choices
@@ -1161,13 +1207,33 @@ func _setup_maps() -> void:
 	_mini_map.compact = true
 	_mini_map.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_mini_map.map_clicked.connect(open_map)
+	_mini_map.door_clicked.connect(map_door_click)
+	_mini_map.marker_clicked.connect(_on_map_marker_clicked)
 	mini_map_host.add_child(_mini_map)
+	_mini_banner = Label.new()
+	_mini_banner.name = "MiniMapBanner"
+	_mini_banner.visible = false
+	_mini_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_mini_banner.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	_mini_banner.offset_top = -22.0
+	_mini_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mini_banner.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_mini_banner.add_theme_font_size_override("font_size", 12)
+	_mini_banner.add_theme_color_override("font_color", MAP_MSG_COLOR)
+	var bsb := StyleBoxFlat.new()
+	bsb.bg_color = Color(0.05, 0.02, 0.01, 0.92)
+	bsb.border_color = MAP_MSG_COLOR
+	bsb.set_border_width_all(1)
+	_mini_banner.add_theme_stylebox_override("normal", bsb)
+	mini_map_host.add_child(_mini_banner)
 	_full_map = ShipMapView.new()
 	_full_map.name = "FullMap"
 	_full_map.show_legend = true
 	_full_map.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_full_map.room_hovered.connect(_on_map_room_hovered)
 	_full_map.room_clicked.connect(_on_full_map_room_clicked)
+	_full_map.door_clicked.connect(map_door_click)
+	_full_map.marker_clicked.connect(_on_map_marker_clicked)
 	map_host.add_child(_full_map)
 	map_close_button.pressed.connect(close_map)
 	map_close_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -1191,6 +1257,9 @@ func _refresh_maps() -> void:
 	mini_map_frame.visible = not vessel_map.is_empty()
 	if vessel_map.is_empty():
 		return
+	_apply_door_flags()
+	vessel_map["markers"] = _build_map_markers()
+	vessel_map["click_doors"] = _map_click_doors()
 	_mini_map.set_map(vessel_map)
 	_full_map.set_map(vessel_map)
 	for v in _extra_maps:
@@ -1843,7 +1912,7 @@ func go_target(target: String) -> bool:
 func change_scene(path: String) -> void:
 	carry = {"flags": flags.duplicate(true), "vars": vars.duplicate(true),
 		"inventory": Array(inventory), "unlocked": Array(unlocked), "o2": o2_level,
-		"map": vessel_map.duplicate(true)}
+		"map": vessel_map.duplicate(true), "time_blocks": time_blocks, "time_blocks_live": time_blocks_live}
 	_dev_stop_chapter()
 	get_tree().change_scene_to_file.call_deferred(path)
 
@@ -1863,9 +1932,429 @@ func _apply_carry() -> void:
 		if dossiers.has(dn) and dn not in unlocked:
 			unlocked.append(dn)
 	set_o2(float(c.get("o2", 100.0)))
+	if c.has("time_blocks"):   # the hours left travel with the player (the excursion starts with what is left)
+		time_blocks = clampi(int(c["time_blocks"]), 0, TIME_BLOCK_MAX)
+		time_blocks_live = bool(c.get("time_blocks_live", false))
+		_refresh_time_bar()
 	if c.get("map", {}) is Dictionary and not (c.get("map", {}) as Dictionary).is_empty():
 		vessel_map = (c["map"] as Dictionary).duplicate(true)
 		_refresh_maps()
+
+
+# ======================================================== ITEMS, DOORS, STATIONS
+## The ready-room mechanics: taking / dropping / wearing items, padlocked doors that need a card,
+## map markers (LOCKER, COFFEE POT, dropped items) and the coffee pot. All state lives in flags /
+## vars (so it is carried to the next scene and recorded by the dev-back snapshots):
+##   vars["taken"]        ids taken from containers (a container shows them as gone)
+##   vars["dropped"]      {room_id: [{uid, id, label, detail}]} items lying on the floor
+##   vars["suit_worn"]    bool (also flags["suit_worn"]); flags["went_without_suit"] if they left without it
+##   vars["coffee"]       {pot, brews, drinks, disabled}
+##   flags["door_open_<a>_<b>"] a padlocked door was opened with its card (the door in vessel_map is "open")
+
+func mark_item_taken(id: String) -> void:
+	var taken: Array = vars.get("taken", [])
+	if id not in taken:
+		taken.append(id)
+	vars["taken"] = taken
+
+
+## The container shows an item as gone once it was taken (even if it was dropped, worn or used since).
+func item_ever_taken(id: String) -> bool:
+	return id != "" and (id in (vars.get("taken", []) as Array) or StringName(id) in inventory
+		or (id == str(SUIT_ID) and suit_is_worn()))
+
+
+func suit_is_worn() -> bool:
+	return bool(vars.get("suit_worn", false))
+
+
+## Character-screen buttons for an inventory entry: "Put on" for wearables, "Drop" for everything.
+func char_item_actions(entry: Dictionary) -> Array:
+	var id := str(entry.get("id", ""))
+	if id in WEARABLE_IDS and not (id == str(SUIT_ID) and suit_is_worn()):
+		return ["wear", "drop"]
+	return ["drop"]
+
+
+func _on_character_action(action: String, item: Dictionary) -> void:
+	match action:
+		"drop":
+			drop_item(StringName(str(item.get("id", ""))))
+		"wear":
+			if str(item.get("id", "")) == str(SUIT_ID):
+				wear_suit()
+
+
+# ---- the suit
+
+## Put the suit on: costs 1 hr (refused with a message if there is not enough), plays the zipper,
+## fades the screen out and back in; when it is dark the suit leaves the inventory and the figure
+## on the character screen turns green. vars["suit_worn"] = true.
+func wear_suit() -> bool:
+	if _suit_busy or suit_is_worn() or SUIT_ID not in inventory:
+		return false
+	var why := hours_refusal(1)
+	if why != "":
+		if windows != null:
+			windows.notice(why, "character")
+		play_sfx(&"close")
+		return false
+	spend_hours(1)
+	_suit_busy = true
+	_play_file_sfx(ZIPPER_SFX, -4.0)
+	if _suit_fade == null:
+		_suit_fade = ColorRect.new()
+		_suit_fade.name = "SuitFade"
+		_suit_fade.color = Color(0, 0, 0, 0)
+		_suit_fade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		add_child(_suit_fade)
+		move_child(_suit_fade, pause_menu.get_index())   # over the windows, under the pause menu
+	_suit_fade.mouse_filter = Control.MOUSE_FILTER_STOP
+	_suit_fade.show()
+	var tw := create_tween()
+	tw.tween_property(_suit_fade, "color:a", 1.0, SUIT_FADE_IN)
+	tw.tween_callback(_apply_suit_on)
+	tw.tween_interval(SUIT_FADE_HOLD)
+	tw.tween_property(_suit_fade, "color:a", 0.0, SUIT_FADE_OUT)
+	tw.tween_callback(func() -> void:
+		_suit_fade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_suit_fade.hide()
+		_suit_busy = false)
+	return true
+
+
+func _apply_suit_on() -> void:
+	take_item(SUIT_ID)
+	vars["suit_worn"] = true
+	flags["suit_worn"] = true
+	if windows != null:
+		windows.refresh()
+
+
+func suit_fade_busy() -> bool:
+	return _suit_busy
+
+
+# ---- dropping and picking up
+
+## Drop an inventory item on the floor of the current room (free). Shows as a green rectangle on the map.
+func drop_item(id: StringName) -> bool:
+	if id not in inventory or (id == SUIT_ID and suit_is_worn()):
+		return false
+	var room := str(vessel_map.get("current", "")) if not vessel_map.is_empty() else ""
+	var info: Dictionary = items.get(id, {})
+	var seq := int(vars.get("drop_seq", 0)) + 1
+	vars["drop_seq"] = seq
+	var dropped: Dictionary = vars.get("dropped", {})
+	var list: Array = dropped.get(room, [])
+	list.append({"uid": "d%d" % seq, "id": str(id), "label": str(info.get("label", id)).to_upper(),
+		"detail": str(info.get("desc", ""))})
+	dropped[room] = list
+	vars["dropped"] = dropped
+	take_item(id)
+	if windows != null:
+		windows.refresh()
+	_refresh_maps()
+	play_sfx(&"tap")
+	return true
+
+
+func dropped_in(room_id: String) -> Array:
+	return ((vars.get("dropped", {}) as Dictionary).get(room_id, []) as Array)
+
+
+## Pick a dropped item back up by its uid (free).
+func pickup_dropped(uid: String) -> bool:
+	var dropped: Dictionary = vars.get("dropped", {})
+	for room: Variant in dropped.keys():
+		var list: Array = dropped[room]
+		for k in list.size():
+			var e: Dictionary = list[k]
+			if str(e.get("uid", "")) != uid:
+				continue
+			list.remove_at(k)
+			if list.is_empty():
+				dropped.erase(room)
+			vars["dropped"] = dropped
+			var id := StringName(str(e.get("id", "")))
+			var prev: Dictionary = items.get(id, {})
+			prev["label"] = str(e.get("label", id))
+			prev["desc"] = str(e.get("detail", ""))
+			items[id] = prev
+			give_item(id)
+			_refresh_maps()
+			return true
+	return false
+
+
+func open_floor(room_id: String) -> void:
+	var list := dropped_in(room_id)
+	if list.is_empty():
+		return
+	var cells: Array = []
+	for e: Dictionary in list:
+		cells.append({"id": str(e.get("uid", "")), "label": str(e.get("label", "")), "detail": str(e.get("detail", "")),
+			"hours": 0, "required": false, "actions": ["take"]})
+	var spec := {"container": true, "title": "FLOOR", "text": "Things left on the floor of this room.",
+		"grid": {"cols": 3, "rows": clampi(ceili(cells.size() / 3.0), 3, 8)}, "items": cells}
+	_ensure_windows()
+	windows.taken_check = func(_a: String, _i: Dictionary) -> bool: return false
+	play_sfx(&"tap")
+	windows.open_container(FLOOR_ACT, spec)
+
+
+# ---- map markers
+
+## Markers drawn on the maps: the scene's (LOCKER, COFFEE POT: _scene_map_markers) + dropped items.
+func _build_map_markers() -> Array:
+	var out: Array = _scene_map_markers()
+	var dropped: Dictionary = vars.get("dropped", {})
+	var w := (0.94 - 0.02 * float(DROP_SLOTS - 1)) / float(DROP_SLOTS)
+	for room_id: Variant in dropped:
+		var list: Array = dropped[room_id]
+		var shown := list.size() if list.size() <= DROP_SLOTS else DROP_SLOTS - 1
+		for i in shown:
+			out.append({"id": "drop:%s" % str((list[i] as Dictionary).get("uid", "")), "kind": "drop", "room": str(room_id),
+				"label": str((list[i] as Dictionary).get("label", "")),
+				"rect": [0.03 + float(i) * (w + 0.02), 0.79, w, 0.17]})
+		if list.size() > DROP_SLOTS:
+			out.append({"id": "pile:%s" % str(room_id), "kind": "pile", "room": str(room_id),
+				"label": "PILE +%d" % (list.size() - shown), "rect": [0.03 + float(shown) * (w + 0.02), 0.79, w, 0.17]})
+	return out
+
+
+## Chapters add their own markers (authored_scene.gd: the acts that have a "marker").
+func _scene_map_markers() -> Array:
+	return []
+
+
+## Door keys ("a|b") that react to a click while open (the scene's exit door).
+func _map_click_doors() -> Array:
+	return []
+
+
+func _on_map_marker_clicked(id: String) -> void:
+	if windows_open() or _suit_busy or (confirm_box != null and confirm_box.visible) \
+			or (guide_tour != null and guide_tour.visible):
+		return
+	if id.begins_with("drop:"):
+		var uid := id.substr(5)
+		var label := ""
+		for e: Dictionary in dropped_in(str(vessel_map.get("current", ""))):
+			if str(e.get("uid", "")) == uid:
+				label = str(e.get("label", ""))
+		if pickup_dropped(uid):
+			play_sfx(&"tap")
+			os_toast("PICKED UP: %s" % label)
+	elif id.begins_with("pile:"):
+		open_floor(id.substr(5))
+	else:
+		_on_map_station_clicked(id)
+
+
+## A scene marker (LOCKER, COFFEE POT) was clicked. authored_scene.gd opens the act's window.
+func _on_map_station_clicked(_id: String) -> void:
+	pass
+
+
+# ---- padlocked doors
+
+## A lock (or a clickable open door) was clicked on a map. A locked door with a required card:
+## without it, an error line + sound ("Requires Airlock Keycard", exact); with it, the lock shakes,
+## pops open and is replaced by the open doorway, and the room behind is named. Data (see
+## data/vessel.gd): door {key: item id, key_name: "Airlock Keycard", behind: room id,
+## fail: "restrict" (reveal the RESTRICTED stamp when it is tried without the card)}.
+func map_door_click(key: String) -> void:
+	ensure_vessel_map()
+	var parts := key.split("|", false)
+	if parts.size() < 2:
+		return
+	var d := map_door_between(parts[0], parts[1])
+	if d.is_empty():
+		return
+	var dkey := ShipMapView.door_key(d)
+	if str(d.get("state", "open")) == "open":
+		map_door_activated.emit(dkey)
+		return
+	var need := str(d.get("key", "")).strip_edges()
+	var behind := str(d.get("behind", ""))
+	if need != "" and StringName(need) in inventory:
+		_unlock_door(d)
+		return
+	var msg := "Requires %s" % str(d.get("key_name", need.capitalize())) if need != "" else "Keycard required"
+	_map_error(msg)
+	if str(d.get("fail", "")) == "restrict" and behind != "" and not map_room_restricted(behind):
+		map_restrict_room(StringName(behind), true)   # the console tells you what the room is
+		flags["room_revealed_" + behind] = true
+
+
+## The flags are the record: doors opened with their card stay open (and their room named), and a
+## room whose lock was tried keeps its RESTRICTED stamp, whatever map copy the scene started from.
+func _apply_door_flags() -> void:
+	var rooms: Dictionary = vessel_map.get("rooms", {})
+	for d: Dictionary in vessel_map.get("doors", []):
+		var a := str(d.get("a", ""))
+		var b := str(d.get("b", ""))
+		var behind := str(d.get("behind", ""))
+		if flags.get("door_open_%s_%s" % [a, b], false) and str(d.get("state", "")) == "locked":
+			d["state"] = "open"
+			d["unlocked"] = true
+		if behind != "" and rooms.has(behind) and flags.get("room_revealed_" + behind, false):
+			if str(d.get("fail", "")) == "restrict":
+				(rooms[behind] as Dictionary)["restricted"] = true
+			else:
+				(rooms[behind] as Dictionary)["known"] = true
+
+
+func _unlock_door(d: Dictionary) -> void:
+	d["state"] = "open"
+	d["unlocked"] = true
+	var a := str(d.get("a", ""))
+	var b := str(d.get("b", ""))
+	flags["door_open_%s_%s" % [a, b]] = true
+	var behind := str(d.get("behind", ""))
+	var room := _map_room(StringName(behind)) if behind != "" else {}
+	if not room.is_empty():
+		room["known"] = true   # the room's name is shown now
+		flags["room_revealed_" + behind] = true
+	_refresh_maps()
+	var views: Array = [_mini_map, _full_map]
+	views.append_array(_extra_maps)
+	for v: Variant in views:
+		if is_instance_valid(v):
+			(v as ShipMapView).pop_unlock(ShipMapView.door_key(d))
+	_play_file_sfx(UNLOCK_SFX, -6.0)
+	_map_banner("DOOR UNLOCKED", false)
+	map_message("DOOR UNLOCKED", false)
+
+
+func _map_error(text: String) -> void:
+	map_last_error = text
+	_play_file_sfx(ERROR_SFX, -4.0)
+	_map_banner(text, true)
+	map_message(text, true)
+
+
+## A short line over the minimap (also readable in tests via _mini_banner.text).
+func _map_banner(text: String, warn := true) -> void:
+	if _mini_banner == null:
+		return
+	_mini_banner_token += 1
+	var token := _mini_banner_token
+	_mini_banner.text = text
+	_mini_banner.add_theme_color_override("font_color", MAP_MSG_COLOR if warn else Color(0.6, 0.95, 0.62))
+	_mini_banner.show()
+	await get_tree().create_timer(MAP_MSG_SECONDS + 0.4).timeout
+	if token == _mini_banner_token and is_instance_valid(_mini_banner):
+		_mini_banner.hide()
+
+
+## Plays a short sound file once (silently skipped if the file is not imported / missing).
+func _play_file_sfx(path: String, volume_db := -6.0) -> void:
+	if not ResourceLoader.exists(path):
+		return
+	var p: AudioStreamPlayer = _file_sfx.get(path)
+	if p == null or not is_instance_valid(p):
+		p = AudioStreamPlayer.new()
+		p.name = "Sfx_" + path.get_file().get_basename()
+		p.bus = sfx_open.bus
+		add_child(p)
+		_file_sfx[path] = p
+	p.volume_db = volume_db
+	p.stream = load(path)
+	p.play()
+
+
+# ---- stations (the coffee pot)
+
+## A station act (spec has "station") was clicked: its window opens.
+func open_station(act_id: String, spec: Dictionary) -> void:
+	var sid := str(spec.get("station", act_id))
+	_ensure_windows()
+	play_sfx(&"tap")
+	windows.open_station(sid, spec, _station_provider.bind(sid))
+
+
+func _station_provider(sid: String) -> Dictionary:
+	if sid == "coffee":
+		return coffee_provider()
+	return {"text": "", "options": []}
+
+
+func _on_station_option(sid: String, oid: String) -> void:
+	if sid == "coffee":
+		coffee_option(oid)
+
+
+## Counters live in vars["coffee"]. A later pass can cap the pot (ship AI voicelines getting annoyed)
+## and switch it off with coffee_set_disabled(true): a disabled machine offers no options.
+func coffee_state() -> Dictionary:
+	var c: Variant = vars.get("coffee", null)
+	if not (c is Dictionary):
+		c = {"pot": false, "brews": 0, "drinks": 0, "disabled": false}
+		vars["coffee"] = c
+	return c
+
+
+func coffee_set_disabled(on: bool) -> void:
+	coffee_state()["disabled"] = on
+	if windows != null:
+		windows.refresh_station()
+
+
+func coffee_provider() -> Dictionary:
+	var c := coffee_state()
+	if bool(c.get("disabled", false)):
+		return {"text": "MACHINE DISABLED.", "options": [], "pot": "empty", "disabled": true}
+	if bool(c.get("pot", false)):
+		return {"text": "A full pot. It is hot and it smells like coffee.",
+			"options": [{"id": "drink", "label": "Drink coffee? (1 hr)"}], "pot": "full", "disabled": false}
+	return {"text": "The pot is empty and cold.",
+		"options": [{"id": "brew", "label": "Brew a Pot (1 hr)"}], "pot": "empty", "disabled": false}
+
+
+## "brew" / "drink": each costs 1 hr (refused with a message when the hours are not there).
+## The pot never runs dry for now: after the first brew, "Drink coffee?" stays on offer.
+func coffee_option(oid: String) -> bool:
+	var c := coffee_state()
+	if bool(c.get("disabled", false)):
+		return false
+	if oid == "brew" and bool(c.get("pot", false)):
+		return false
+	if oid == "drink" and not bool(c.get("pot", false)):
+		return false
+	if oid != "brew" and oid != "drink":
+		return false
+	var why := hours_refusal(1)
+	if why != "":
+		if windows != null:
+			windows.notice(why, "station")
+		play_sfx(&"close")
+		return false
+	spend_hours(1)
+	if oid == "brew":
+		c["pot"] = true
+		c["brews"] = int(c.get("brews", 0)) + 1
+		flags["coffee_brewed"] = true
+	else:
+		c["drinks"] = int(c.get("drinks", 0)) + 1
+		flags["coffee_drunk"] = true
+	play_sfx(&"tap")
+	if windows != null:
+		windows.refresh_station()
+	return true
+
+
+# ---- Yes / No prompt
+
+## Modal Yes / No. on_yes / on_no are called after the box closes.
+func ask_confirm(text: String, on_yes: Callable, on_no := Callable()) -> void:
+	if confirm_box == null:
+		confirm_box = ConfirmScript.new()
+		add_child(confirm_box)
+		move_child(confirm_box, pause_menu.get_index())
+	confirm_box.ask(text, on_yes, on_no)
+	play_sfx(&"open")
 
 
 # ======================================================== DEATH SCREEN
@@ -1923,6 +2412,8 @@ func show_death(message := DEATH_MESSAGE, retry_label := DEATH_RETRY, retry_targ
 	popup.hide()
 	map_overlay.hide()
 	plate.hide()
+	if windows != null:
+		windows.close_all(true)
 	_death_target = retry_target
 	_death_hidden.clear()
 	for c in get_children():
@@ -2117,6 +2608,7 @@ func _ensure_input_map() -> void:
 		"choice_8": [KEY_8, KEY_KP_8],
 		"choice_9": [KEY_9, KEY_KP_9],
 		"tab_next": [KEY_E, KEY_TAB],
+		"toggle_character": [KEY_TAB, KEY_C, KEY_I],
 		"tab_prev": [KEY_Q],
 		"toggle_fullscreen": [KEY_F11],
 		"advance": [KEY_SPACE, KEY_ENTER],
@@ -2175,6 +2667,11 @@ func _input(event: InputEvent) -> void:
 			_handle_escape()
 			_handled()
 		return
+	if confirm_box != null and confirm_box.visible and not pause_menu.visible:
+		if event.is_action_pressed("pause_menu"):
+			confirm_box.answer(false)   # Esc = No
+		_handled()
+		return
 	if event.is_action_pressed("pause_menu"):
 		_handle_escape()
 		_handled()
@@ -2184,6 +2681,23 @@ func _input(event: InputEvent) -> void:
 	if death_screen.visible:
 		if event.is_action_pressed("advance") or event.is_action_pressed("choice_1"):
 			retry_death()
+		_handled()
+		return
+	if guide_tour != null and guide_tour.visible:
+		# a walkthrough tip is up: Space / Enter / 1 = its CONTINUE, nothing else gets keys
+		if event.is_action_pressed("advance") or event.is_action_pressed("choice_1"):
+			guide_tour.press()
+		_handled()
+		return
+	if windows != null and windows.any_open():
+		# A window is up: the story underneath gets no keys. TAB / C / I toggle the character screen.
+		if event.is_action_pressed("toggle_character"):
+			windows.toggle_character()
+		_handled()
+		return
+	if excursion_chrome and event.is_action_pressed("toggle_character") and not popup.visible \
+			and not plate.visible and not map_overlay.visible and safe_area.is_visible_in_tree():
+		show_inv()
 		_handled()
 		return
 	if event.is_action_pressed("advance"):
@@ -2249,7 +2763,9 @@ func _on_pause_changed(_paused: bool) -> void:
 
 
 func _handle_escape() -> void:
-	if map_overlay.visible and not map_locked_open:
+	if windows != null and windows.any_open() and not pause_menu.visible:
+		windows.close_top()   # Esc closes the topmost window (container first, then the character screen)
+	elif map_overlay.visible and not map_locked_open:
 		close_map()
 	elif popup.visible:
 		close_popup()

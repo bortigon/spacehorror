@@ -756,8 +756,8 @@ func _setup_intro_hud() -> void:
 	hud_o2.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	hud_o2.offset_left = -264.0
 	hud_o2.offset_right = -64.0
-	hud_o2.offset_top = 10.0
-	hud_o2.offset_bottom = 26.0
+	hud_o2.offset_top = 8.0
+	hud_o2.offset_bottom = 8.0 + O2Bar.TOTAL_H
 	thaw.add_child(hud_o2)
 	register_o2_bar(hud_o2)
 
