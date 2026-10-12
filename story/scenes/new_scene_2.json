@@ -1,0 +1,65 @@
+{
+  "format": 1,
+  "id": "new_scene_2",
+  "title": "NEW SCENE",
+  "speed": 40,
+  "background": "",
+  "background_alpha": 0.12,
+  "ambience": "",
+  "show_hud": true,
+  "ui": "game",
+  "fade_in": 0.7,
+  "after": "order:next",
+  "screens": [
+    {
+      "id": "ready_room",
+      "heading": "READY ROOM",
+      "text": "[expo]You enter the ready room. There are several benches running along lockers that line the walls. [/expo]\n\nThe locker is in front of you.\nEight hours on the bar. This room shows the cost. It does not spend them.\n[act=locker]locker[/act]\nThe suit is required to leave. The lantern is light.\n",
+      "speed": 0,
+      "shake": 0,
+      "red": {
+        "mode": "off",
+        "from": 0.0,
+        "to": 0.0
+      },
+      "vo": {
+        "clip": "",
+        "from": 0.0,
+        "to": -1.0,
+        "cues": []
+      },
+      "sfx": [],
+      "question": "",
+      "end": {
+        "type": "continue",
+        "goto": "next",
+        "require": "suit"
+      },
+      "acts": {
+        "locker": {
+          "text": "The locker is in front of you.\nThe suit is required to leave. The lantern is light.\nEight hours on the bar. This room shows the cost. It does not spend them.",
+          "choices": [
+            {
+              "label": "SUIT",
+              "hours": 1,
+              "item": "suit",
+              "detail": "Required to leave.",
+              "required": true
+            },
+            {
+              "label": "LANTERN",
+              "hours": 1,
+              "item": "lantern",
+              "detail": "Light.",
+              "required": false
+            }
+          ]
+        }
+      },
+      "on_enter": [
+        "map_set_room:ready_room",
+        "map_restrict_room:stbd_hold"
+      ]
+    }
+  ]
+}

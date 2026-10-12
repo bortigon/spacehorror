@@ -1,0 +1,174 @@
+{
+  "format": 1,
+  "id": "excursion1_prep",
+  "title": "EXCURSION 1 // PREP",
+  "speed": 40,
+  "background": "",
+  "background_alpha": 0.12,
+  "ambience": "",
+  "show_hud": true,
+  "ui": "game",
+  "fade_in": 1.5,
+  "after": "order:next",
+  "screens": [
+    {
+      "id": "brief",
+      "heading": "",
+      "text": "OPERATOR, now that you have excreted waste, decontaminated yourself, and ingested nutrients,\n+we will prepare for the EXCURSION.\n+Reminder: Everything you do aboard any REC-7 vessel is recorded.\n+The scheduled EXCURSION will begin now.\n\nPlease proceed to the READY ROOM.",
+      "speed": 0,
+      "shake": 0,
+      "red": {
+        "mode": "off",
+        "from": 0.0,
+        "to": 0.0
+      },
+      "vo": {
+        "clip": "res://assets/sounds/Exursion1prep.wav",
+        "from": 0.0,
+        "to": -1.0,
+        "cues": [
+          [
+            1.0,
+            6.72
+          ],
+          [
+            7.19,
+            8.78
+          ],
+          [
+            9.43,
+            14.44
+          ],
+          [
+            14.91,
+            17.14
+          ]
+        ]
+      },
+      "sfx": [],
+      "question": "",
+      "end": {
+        "type": "continue",
+        "goto": "next"
+      },
+      "on_enter": [
+        "o2_full",
+        "map_set_room:stasis_15",
+        "map_unlock_door:stasis_15|ready_room",
+        "map_know_room:ready_room",
+        "map_know_room:airlock",
+        "map_know_door:ready_room|airlock",
+        "map_know_door:ready_room|stbd_hold"
+      ]
+    },
+    {
+      "id": "map",
+      "heading": "",
+      "text": "",
+      "speed": 0,
+      "shake": 0,
+      "red": {
+        "mode": "off",
+        "from": 0.0,
+        "to": 0.0
+      },
+      "vo": {
+        "clip": "",
+        "from": 0.0,
+        "to": -1.0,
+        "cues": []
+      },
+      "sfx": [],
+      "question": "",
+      "end": {
+        "type": "map_tour",
+        "tips": [
+          {
+            "text": "This is your TRM-CUFF Map. The yellow circle indicates your current position.",
+            "target": "map"
+          },
+          {
+            "text": "Green rooms have been explored.",
+            "target": "room:stasis_15"
+          },
+          {
+            "text": "Dark rooms have not been explored.",
+            "target": "room:stbd_hold"
+          },
+          {
+            "text": "If a Dark Room is named, you might know what to expect, but you have not explored it.",
+            "target": "room:ready_room"
+          },
+          {
+            "text": "These lines indicate doors or other passages.",
+            "target": "door:stasis_15|ready_room"
+          },
+          {
+            "text": "Lock symbols mean the door is locked, and you will need a KEYCARD to open it.",
+            "target": "door:ready_room|stbd_hold"
+          },
+          {
+            "text": "Click on the room you wish to move to. If there is an accessible passage, you will move there.",
+            "target": "rooms"
+          }
+        ],
+        "move_to": "ready_room",
+        "move_prompt": "Please proceed to the READY ROOM.",
+        "on_arrive": [
+          "map_restrict_room:stbd_hold"
+        ],
+        "goto": "next"
+      }
+    },
+    {
+      "id": "ready_room",
+      "heading": "READY ROOM",
+      "text": "The locker is in front of you.\nEight hours on the bar. This room shows the cost. It does not spend them.\n[act=locker]LOCKER[/act]\nThe SUIT is required to leave. The LANTERN is light.",
+      "speed": 0,
+      "shake": 0,
+      "red": {
+        "mode": "off",
+        "from": 0.0,
+        "to": 0.0
+      },
+      "vo": {
+        "clip": "",
+        "from": 0.0,
+        "to": -1.0,
+        "cues": []
+      },
+      "sfx": [],
+      "question": "",
+      "end": {
+        "type": "continue",
+        "goto": "order:next",
+        "require": "suit"
+      },
+      "acts": {
+        "locker": {
+          "text": "The locker is in front of you.\nThe suit is required to leave. The lantern is light.\nEight hours on the bar. This room shows the cost. It does not spend them.",
+          "choices": [
+            {
+              "label": "SUIT",
+              "hours": 1,
+              "item": "suit",
+              "detail": "Required to leave.",
+              "required": true
+            },
+            {
+              "label": "LANTERN",
+              "hours": 1,
+              "item": "lantern",
+              "detail": "Light.",
+              "required": false
+            }
+          ]
+        }
+      },
+      "on_enter": [
+        "map_set_room:ready_room",
+        "map_restrict_room:stbd_hold"
+      ]
+    }
+  ]
+}

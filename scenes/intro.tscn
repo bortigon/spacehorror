@@ -1,0 +1,177 @@
+[gd_scene format=3]
+
+[ext_resource type="PackedScene" path="res://templates/pda_screen.tscn" id="1_base"]
+[ext_resource type="Script" path="res://scenes/intro.gd" id="2_script"]
+[ext_resource type="AudioStream" path="res://assets/sounds/shipwelcome.wav" id="3_vo_main"]
+[ext_resource type="AudioStream" path="res://assets/sounds/shipwelcomeA.wav" id="4_vo_yes"]
+[ext_resource type="AudioStream" path="res://assets/sounds/shipwelcomeB.wav" id="5_vo_no"]
+
+[node name="Intro" instance=ExtResource("1_base")]
+script = ExtResource("2_script")
+
+[node name="Thaw" type="Control" parent="."]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="ThawBox" type="MarginContainer" parent="Thaw"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/margin_left = 112
+theme_override_constants/margin_top = 34
+theme_override_constants/margin_right = 310
+theme_override_constants/margin_bottom = 40
+
+[node name="ThawCol" type="VBoxContainer" parent="Thaw/ThawBox"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 10
+
+[node name="ThawStatus" type="Label" parent="Thaw/ThawBox/ThawCol"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"OsLabelDim"
+text = "REC-7 // STASIS THAW"
+autowrap_mode = 3
+
+[node name="ThawRule" type="HSeparator" parent="Thaw/ThawBox/ThawCol"]
+layout_mode = 2
+mouse_filter = 2
+
+[node name="ThawPin" type="RichTextLabel" parent="Thaw/ThawBox/ThawCol"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+mouse_filter = 2
+theme_override_colors/default_color = Color(0.56, 0.8, 0.6, 1)
+theme_override_constants/line_separation = 3
+theme_override_font_sizes/normal_font_size = 14
+theme_override_font_sizes/bold_font_size = 14
+bbcode_enabled = true
+fit_content = true
+scroll_active = false
+text = ""
+
+[node name="ThawScroll" type="ScrollContainer" parent="Thaw/ThawBox/ThawCol"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+mouse_filter = 1
+horizontal_scroll_mode = 0
+
+[node name="ThawText" type="RichTextLabel" parent="Thaw/ThawBox/ThawCol/ThawScroll"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+mouse_filter = 1
+theme_override_colors/default_color = Color(0.56, 0.8, 0.6, 1)
+theme_override_constants/line_separation = 3
+theme_override_font_sizes/normal_font_size = 14
+theme_override_font_sizes/bold_font_size = 14
+bbcode_enabled = true
+fit_content = true
+scroll_active = false
+text = ""
+
+[node name="ThawChoices" type="VBoxContainer" parent="Thaw/ThawBox/ThawCol"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="ThawChoicesHeader" type="Label" parent="Thaw/ThawBox/ThawCol/ThawChoices"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"OsLabelDim"
+text = "RESPONSE"
+
+[node name="ExamContinue" type="Button" parent="Thaw/ThawBox/ThawCol"]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(220, 38)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+text = "CONTINUE"
+
+[node name="ExamNameBox" type="VBoxContainer" parent="Thaw/ThawBox/ThawCol"]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_constants/separation = 8
+
+[node name="ExamNameEdit" type="LineEdit" parent="Thaw/ThawBox/ThawCol/ExamNameBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+placeholder_text = "NAME"
+alignment = 1
+max_length = 20
+virtual_keyboard_enabled = false
+caret_blink = true
+
+[node name="ExamNameConfirm" type="Button" parent="Thaw/ThawBox/ThawCol/ExamNameBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 38)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "SUBMIT"
+
+[node name="ExamNameHint" type="Label" parent="Thaw/ThawBox/ThawCol/ExamNameBox"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_type_variation = &"OsLabelDim"
+text = ""
+horizontal_alignment = 1
+
+[node name="ExamVignette" type="ColorRect" parent="Thaw"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.02, 0, 0, 0)
+
+[node name="VoiceMain" type="AudioStreamPlayer" parent="."]
+unique_name_in_owner = true
+stream = ExtResource("3_vo_main")
+bus = &"Voice"
+
+[node name="VoiceYes" type="AudioStreamPlayer" parent="."]
+unique_name_in_owner = true
+stream = ExtResource("4_vo_yes")
+bus = &"Voice"
+
+[node name="VoiceNo" type="AudioStreamPlayer" parent="."]
+unique_name_in_owner = true
+stream = ExtResource("5_vo_no")
+bus = &"Voice"
+
+[node name="VoiceExam" type="AudioStreamPlayer" parent="."]
+unique_name_in_owner = true
+bus = &"Voice"
+
+
+
+
+
+
+

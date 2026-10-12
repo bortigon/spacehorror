@@ -1,0 +1,8 @@
+* text=auto
+*.wav binary
+*.ogg binary
+*.mp3 binary
+*.png binary
+*.jpg binary
+*.ttf binary
+*.otf binary

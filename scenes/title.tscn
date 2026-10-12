@@ -1,0 +1,125 @@
+[gd_scene load_steps=8 format=3]
+
+[ext_resource type="Script" path="res://scenes/title.gd" id="1_script"]
+[ext_resource type="Theme" path="res://templates/pda_theme.tres" id="2_theme"]
+[ext_resource type="Shader" path="res://shaders/screen_refresh.gdshader" id="3_shader"]
+[ext_resource type="Texture2D" path="res://assets/rec7_logo.png" id="4_logo"]
+[ext_resource type="AudioStream" path="res://assets/sounds/UI-1.mp3" id="5_sfx_tap"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_refresh"]
+shader = ExtResource("3_shader")
+shader_parameter/scanline_count = 180.0
+
+[sub_resource type="Shader" id="Shader_logo_key"]
+code = "// The logo PNG has a solid near-black background: fade the dark pixels out so it
+// sits on the CRT screen (and its refresh glow) without a visible box.
+shader_type canvas_item;
+uniform float cut_low = 0.1;
+uniform float cut_high = 0.35;
+void fragment() {
+	vec4 t = texture(TEXTURE, UV);
+	float m = max(t.r, max(t.g, t.b));
+	COLOR.a *= smoothstep(cut_low, cut_high, m);   // COLOR is already texture * modulate
+}
+"
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_logo"]
+shader = SubResource("Shader_logo_key")
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_frame"]
+bg_color = Color(0, 0, 0, 0)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.22, 0.38, 0.26, 0.7)
+
+[node name="Title" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme = ExtResource("2_theme")
+script = ExtResource("1_script")
+
+[node name="Screen" type="ColorRect" parent="."]
+material = SubResource("ShaderMaterial_refresh")
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 1)
+
+[node name="Frame" type="Panel" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_frame")
+
+[node name="Content" type="CenterContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Col" type="VBoxContainer" parent="Content"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="Logo" type="TextureRect" parent="Content/Col"]
+unique_name_in_owner = true
+material = SubResource("ShaderMaterial_logo")
+custom_minimum_size = Vector2(237, 189)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_filter = 2
+texture = ExtResource("4_logo")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Caption" type="Label" parent="Content/Col"]
+layout_mode = 2
+theme_type_variation = &"OsLabelDim"
+text = "REC-7 // TRM-CUFF"
+horizontal_alignment = 1
+
+[node name="Gap" type="Control" parent="Content/Col"]
+custom_minimum_size = Vector2(0, 26)
+layout_mode = 2
+mouse_filter = 2
+
+[node name="PlayButton" type="Button" parent="Content/Col"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(220, 38)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+text = "PLAY"
+
+[node name="QuitButton" type="Button" parent="Content/Col"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(220, 38)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+text = "QUIT"
+
+[node name="SfxTap" type="AudioStreamPlayer" parent="."]
+unique_name_in_owner = true
+stream = ExtResource("5_sfx_tap")
+bus = &"Sfx"

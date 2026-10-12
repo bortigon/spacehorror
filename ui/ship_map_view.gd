@@ -1,0 +1,659 @@
+class_name ShipMapView
+extends Control
+## Draws the REC-7 vessel schematic from a map Dictionary (see data/vessel.gd).
+## compact = minimap: fixed zoom centred on the current room, labels for explored rooms.
+## full    = whole ship fitted to the rect, labels, hover readout, legend strip.
+
+signal map_clicked
+signal room_hovered(room_id: String)
+## Full map only: left click on a room (click-to-move, see PdaScreen.map_try_move).
+signal room_clicked(room_id: String)
+
+@export var compact := false
+@export var show_legend := false
+## Minimap zoom: screen pixels per schematic unit.
+@export var compact_scale := 0.95
+## false = display only (no hover, no click, mouse passes through), e.g. intro overlay.
+@export var interactive := true
+
+# ---- palette (phosphor CRT) ----
+const COL_BG := Color(0.015, 0.03, 0.022, 0.94)
+const COL_FRAME := Color(0.22, 0.38, 0.26, 1)
+const COL_GRID := Color(0.2, 0.36, 0.24, 0.10)
+const COL_EXPLORED_FILL := Color(0.16, 0.36, 0.2, 1)
+const COL_EXPLORED_EDGE := Color(0.49, 0.85, 0.5, 1)
+const COL_UNEXPLORED_FILL := Color(0.17, 0.19, 0.185, 1)
+const COL_UNEXPLORED_EDGE := Color(0.36, 0.39, 0.38, 1)
+const COL_LOCKED_FILL := Color(0.075, 0.075, 0.07, 1)
+const COL_LOCKED_EDGE := Color(0.5, 0.33, 0.2, 1)
+const COL_DOOR_OPEN := Color(0.62, 0.95, 0.6, 1)
+const COL_DOOR_LOCKED := Color(0.95, 0.62, 0.25, 1)
+const COL_YOU := Color(0.98, 0.9, 0.5, 1)
+const COL_LABEL := Color(0.9, 0.98, 0.9, 1)
+const COL_LABEL_DIM := Color(0.5, 0.6, 0.54, 1)
+const COL_HOVER := Color(0.93, 0.72, 0.38, 1)
+const COL_RESTRICTED := Color(0.92, 0.34, 0.26, 1)
+
+## "restricted" rooms: red outline + this stamp. pop_stamp() animates it in (scale + fade + flash).
+const STAMP_TEXT := "RESTRICTED"
+const STAMP_POP := 0.45      # seconds: stamp scales 1.9 → 1 and fades in
+const STAMP_FLASH := 0.9     # seconds: red flash over the room fades out
+
+const LEGEND_H := 34.0
+const LEGEND_W := 176.0
+
+var map_data: Dictionary = {}
+var hovered_id := ""
+var _font_label: Font
+var _font_mono: Font
+var _xf := Transform2D.IDENTITY
+var _t := 0.0
+var _pops: Dictionary = {}   # room id → Time.get_ticks_msec() of its stamp pop
+
+
+func _ready() -> void:
+	clip_contents = true
+	mouse_filter = Control.MOUSE_FILTER_STOP if interactive else Control.MOUSE_FILTER_IGNORE
+	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if compact and interactive else Control.CURSOR_ARROW
+	_font_label = load("res://assets/fonts/Oxanium-SemiBold.ttf")
+	_font_mono = load("res://assets/fonts/IBMPlexMono-SemiBold.ttf")
+
+
+func set_map(data: Dictionary) -> void:
+	map_data = data
+	queue_redraw()
+
+
+func _process(delta: float) -> void:
+	if is_visible_in_tree() and (str(map_data.get("current", "")) != "" or not _pops.is_empty()):
+		_t += delta
+		queue_redraw()
+
+
+## Animate a room's RESTRICTED stamp in (PdaScreen.map_restrict_room calls this).
+func pop_stamp(id: String) -> void:
+	_pops[id] = Time.get_ticks_msec()
+	queue_redraw()
+
+
+## Seconds since the room's stamp popped (large if it never did: fully shown).
+func stamp_age(id: String) -> float:
+	if not _pops.has(id):
+		return 999.0
+	return (Time.get_ticks_msec() - int(_pops[id])) / 1000.0
+
+
+func room_restricted(id: String) -> bool:
+	return bool(((map_data.get("rooms", {}) as Dictionary).get(id, {}) as Dictionary).get("restricted", false))
+
+
+func _gui_input(event: InputEvent) -> void:
+	if not interactive:
+		return
+	if event is InputEventMouseMotion and not compact:
+		var id := room_at((event as InputEventMouseMotion).position)
+		if id != hovered_id:
+			hovered_id = id
+			room_hovered.emit(id)
+			queue_redraw()
+	elif event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			map_clicked.emit()
+			if not compact:
+				var rid := room_at(mb.position)
+				if rid != "":
+					room_clicked.emit(rid)
+			accept_event()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_MOUSE_EXIT and hovered_id != "":
+		hovered_id = ""
+		room_hovered.emit("")
+		queue_redraw()
+
+
+# ---------------------------------------------------------------- layout
+
+func _map_rect() -> Rect2:
+	var r := Rect2(Vector2.ZERO, size).grow(-6.0 if compact else -10.0)
+	if show_legend and not compact:
+		if _legend_vertical():
+			r.size.x -= LEGEND_W
+		else:
+			r.size.y -= LEGEND_H
+	return r
+
+
+func _legend_vertical() -> bool:
+	return size.x > size.y * 1.3
+
+
+func _bounds() -> Rect2:
+	var have := false
+	var b := Rect2()
+	for room in (map_data.get("rooms", {}) as Dictionary).values():
+		for p in (room as Dictionary).get("poly", []):
+			if not have:
+				b = Rect2(p, Vector2.ZERO)
+				have = true
+			else:
+				b = b.expand(p)
+	return b if have else Rect2(0, 0, 100, 100)
+
+
+func _update_xform() -> void:
+	var area := _map_rect()
+	if compact:
+		var s := compact_scale
+		var focus := _room_center(str(map_data.get("current", "")))
+		var b := _bounds().grow(6.0)
+		if focus == Vector2.INF:
+			focus = b.get_center()
+		var half := area.size / (2.0 * s)   # half view size in schematic units
+		for axis in 2:
+			if half[axis] * 2.0 >= b.size[axis]:
+				focus[axis] = b.get_center()[axis]
+			else:
+				focus[axis] = clampf(focus[axis], b.position[axis] + half[axis], b.end[axis] - half[axis])
+		_xf = Transform2D(Vector2(s, 0), Vector2(0, s), area.get_center() - focus * s)
+	else:
+		var b := _bounds().grow(8.0)
+		var s := minf(area.size.x / b.size.x, area.size.y / b.size.y)
+		var off := area.position + (area.size - b.size * s) * 0.5 - b.position * s
+		_xf = Transform2D(Vector2(s, 0), Vector2(0, s), off)
+
+
+func _scale() -> float:
+	return _xf.x.x
+
+
+# ---------------------------------------------------------------- drawing
+
+func _draw() -> void:
+	draw_rect(Rect2(Vector2.ZERO, size), COL_BG)
+	if map_data.is_empty():
+		return
+	_update_xform()
+	_draw_grid()
+	var rooms: Dictionary = map_data.get("rooms", {})
+	for id in rooms:
+		_draw_room(str(id), rooms[id])
+	for d in map_data.get("doors", []):
+		_draw_door(d)
+	for id in rooms:
+		_draw_room_label(str(id), rooms[id])
+	_draw_you()
+	if show_legend and not compact:
+		_draw_legend()
+	draw_rect(Rect2(Vector2.ZERO, size), COL_FRAME, false, 1.0)
+
+
+func _draw_grid() -> void:
+	var step := 20.0 * _scale()
+	if step < 6.0:
+		return
+	var origin := _xf.origin
+	var x := fposmod(origin.x, step)
+	while x < size.x:
+		draw_line(Vector2(x, 0), Vector2(x, size.y), COL_GRID, 1.0)
+		x += step
+	var y := fposmod(origin.y, step)
+	while y < size.y:
+		draw_line(Vector2(0, y), Vector2(size.x, y), COL_GRID, 1.0)
+		y += step
+
+
+func _screen_poly(room: Dictionary) -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	for p in room.get("poly", []):
+		pts.append(_xf * (p as Vector2))
+	return pts
+
+
+func _draw_room(id: String, room: Dictionary) -> void:
+	var pts := _screen_poly(room)
+	if pts.size() < 3:
+		return
+	var state := str(room.get("state", "unexplored"))
+	var fill := COL_UNEXPLORED_FILL
+	var edge := COL_UNEXPLORED_EDGE
+	if state == "explored":
+		fill = COL_EXPLORED_FILL
+		edge = COL_EXPLORED_EDGE
+	elif state == "locked":
+		fill = COL_LOCKED_FILL
+		edge = COL_LOCKED_EDGE
+	var restricted := bool(room.get("restricted", false))
+	if restricted:
+		fill = COL_LOCKED_FILL
+		edge = COL_RESTRICTED.darkened(0.1)
+	if id == str(map_data.get("current", "")):
+		fill = fill.lightened(0.12)
+	draw_colored_polygon(pts, fill)
+	if restricted and stamp_age(id) < STAMP_FLASH:
+		draw_colored_polygon(pts, Color(COL_RESTRICTED, 0.4 * (1.0 - stamp_age(id) / STAMP_FLASH)))
+	var closed := pts.duplicate()
+	closed.append(pts[0])
+	var w := 2.0 if (id == hovered_id and not compact) else (1.0 if compact else 1.5)
+	draw_polyline(closed, COL_HOVER if (id == hovered_id and not compact) else edge, w, true)
+	if state == "locked" and not restricted:
+		var c := _poly_center(pts)
+		var ls := clampf(_scale() * 7.0, 7.0, 15.0)
+		_draw_lock(c, ls, COL_LOCKED_EDGE.lightened(0.25))
+
+
+func _draw_room_label(id: String, room: Dictionary) -> void:
+	if bool(room.get("restricted", false)):
+		_draw_stamp(id)
+		return
+	var explored := str(room.get("state", "")) == "explored"
+	if not explored and not bool(room.get("known", false)):
+		return   # unexplored rooms stay nameless until their name is known
+	var pts := _screen_poly(room)
+	var c := _poly_center(pts)
+	var label := str(room.get("label", id)).to_upper()
+	var fs := 10 if compact else clampi(int(_scale() * 7.0), 11, 18)
+	var poly_w := _poly_width_at(pts, c.y)
+	var want := _font_label.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	if want > poly_w - 6.0 and id != str(map_data.get("current", "")):
+		# small/tapered room: use its widest horizontal slice instead of the centroid
+		var bb := Rect2(pts[0], Vector2.ZERO)
+		for q in pts:
+			bb = bb.expand(q)
+		for k in range(1, 12):
+			var yy := bb.position.y + bb.size.y * k / 12.0
+			var w := _poly_width_at(pts, yy)
+			if w > poly_w:
+				poly_w = w
+				c = Vector2(_slice_mid(pts, yy), yy)
+	# shrink to fit the room (never below 8 px; tiny rooms may overhang)
+	while fs > 8 and _font_label.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > poly_w - 6.0:
+		fs -= 1
+	var sz := _font_label.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+	var y_off := 0.0
+	if id == str(map_data.get("current", "")):
+		y_off = fs * 0.9 + (4.0 if compact else 8.0)  # sit under the you-are-here marker
+	var pos := Vector2(c.x - sz.x * 0.5, c.y + y_off + fs * 0.35)
+	draw_string(_font_label, pos + Vector2(1, 1), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0, 0, 0, 0.6))
+	draw_string(_font_label, pos, label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, COL_LABEL if explored else COL_LABEL_DIM)
+
+
+## RESTRICTED stamp geometry: centre, rotation (tall narrow rooms get it vertical), font size,
+## box size (unscaled).
+func _stamp_geom(id: String) -> Dictionary:
+	var pts := _screen_poly((map_data.get("rooms", {}) as Dictionary).get(id, {}))
+	if pts.size() < 3:
+		return {}
+	var rr := _pts_rect(pts)
+	var fs := 9 if compact else clampi(int(_scale() * 5.5), 10, 15)
+	var tw := _font_label.get_string_size(STAMP_TEXT, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var rot := 0.0
+	var room_w := rr.size.x
+	if tw + 10.0 > rr.size.x - 4.0 and rr.size.y > rr.size.x:
+		rot = -PI * 0.5
+		room_w = rr.size.y
+	while fs > 7 and tw + 10.0 > room_w - 4.0:
+		fs -= 1
+		tw = _font_label.get_string_size(STAMP_TEXT, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	return {"c": rr.get_center(), "rot": rot, "fs": fs, "tw": tw, "box": Vector2(tw + 10.0, fs + 8.0)}
+
+
+func _draw_stamp(id: String) -> void:
+	var g := _stamp_geom(id)
+	if g.is_empty():
+		return
+	var age := stamp_age(id)
+	var k := clampf(age / STAMP_POP, 0.0, 1.0)
+	var sc := lerpf(1.9, 1.0, 1.0 - pow(1.0 - k, 3.0))
+	var a := clampf(age / 0.18, 0.0, 1.0)
+	var box: Vector2 = g["box"]
+	var fs: int = g["fs"]
+	draw_set_transform(g["c"], g["rot"], Vector2(sc, sc))
+	draw_rect(Rect2(-box * 0.5, box), Color(COL_BG, 0.9 * a))
+	draw_rect(Rect2(-box * 0.5, box), Color(COL_RESTRICTED, a), false, 1.5)
+	draw_string(_font_label, Vector2(-float(g["tw"]) * 0.5, fs * 0.36), STAMP_TEXT, HORIZONTAL_ALIGNMENT_LEFT, -1, fs,
+		Color(COL_RESTRICTED.lightened(0.25), a))
+	draw_set_transform_matrix(Transform2D.IDENTITY)
+
+
+## Screen rect the RESTRICTED stamp covers once settled (Rect2() if the room isn't restricted).
+func stamp_rect_local(id: String) -> Rect2:
+	if not room_restricted(id) or size.x <= 0.0:
+		return Rect2()
+	_update_xform()
+	var g := _stamp_geom(id)
+	if g.is_empty():
+		return Rect2()
+	var box: Vector2 = g["box"]
+	if absf(float(g["rot"])) > 0.1:
+		box = Vector2(box.y, box.x)
+	return Rect2(g["c"] - box * 0.5, box)
+
+
+func _any_restricted() -> bool:
+	for r: Variant in (map_data.get("rooms", {}) as Dictionary).values():
+		if bool((r as Dictionary).get("restricted", false)):
+			return true
+	return false
+
+
+func _draw_door(d: Dictionary) -> void:
+	var rooms: Dictionary = map_data.get("rooms", {})
+	var sa := str((rooms.get(str(d.get("a", "")), {}) as Dictionary).get("state", "unexplored"))
+	var sb := str((rooms.get(str(d.get("b", "")), {}) as Dictionary).get("state", "unexplored"))
+	if sa != "explored" and sb != "explored" and not bool(d.get("always_show", false)) and not bool(d.get("known", false)):
+		return  # doors are only known once you've seen one side (or "known")
+	var open := str(d.get("state", "open")) == "open"
+	var col := COL_DOOR_OPEN if open else COL_DOOR_LOCKED
+	var c: Vector2 = _xf * (d.get("pos", Vector2.ZERO) as Vector2)
+	var along := Vector2.RIGHT if str(d.get("axis", "h")) == "h" else Vector2.DOWN
+	var across := Vector2(-along.y, along.x)
+	var half := maxf(9.0 * _scale(), 5.0)
+	var cap := maxf(3.0 * _scale(), 2.5)
+	# cut a gap in the wall, then draw the doorway bracket |—| like the mockup
+	draw_line(c - along * half, c + along * half, COL_BG, maxf(5.0 * _scale(), 4.0))
+	var w := 2.0 if not compact else 1.5
+	if open:
+		draw_line(c - along * half, c + along * half, col, w, true)
+	else:
+		_draw_dashes(c - along * half, c + along * half, col, w)
+	draw_line(c - along * half - across * cap, c - along * half + across * cap, col, w, true)
+	draw_line(c + along * half - across * cap, c + along * half + across * cap, col, w, true)
+	if not open:
+		_draw_lock(c, clampf(_scale() * 6.0, 6.5, 12.0), col)
+
+
+func _draw_dashes(a: Vector2, b: Vector2, col: Color, w: float) -> void:
+	var n := 5
+	for i in n:
+		if i % 2 == 0:
+			draw_line(a.lerp(b, float(i) / n), a.lerp(b, float(i + 1) / n), col, w, true)
+
+
+func _draw_you() -> void:
+	var c := _room_center(str(map_data.get("current", "")))
+	if c == Vector2.INF:
+		return
+	var p := _xf * c
+	var pulse := 0.5 + 0.5 * sin(_t * 4.0)
+	var r := 3.5 if compact else 5.0
+	draw_circle(p, r + 3.0 + pulse * 3.0, Color(COL_YOU, 0.18 + 0.12 * (1.0 - pulse)))
+	draw_arc(p, r + 2.0 + pulse * 2.5, 0.0, TAU, 24, Color(COL_YOU, 0.8 - 0.5 * pulse), 1.2, true)
+	draw_circle(p, r, COL_YOU)
+
+
+## Vector padlock (no font glyph): shackle arc + body + keyhole.
+func _draw_lock(c: Vector2, s: float, col: Color) -> void:
+	var body := Rect2(c.x - s * 0.62, c.y - s * 0.1, s * 1.24, s * 0.95)
+	draw_arc(Vector2(c.x, body.position.y), s * 0.4, PI, TAU, 14, col, maxf(s * 0.18, 1.3), true)
+	draw_line(Vector2(c.x - s * 0.4, body.position.y), Vector2(c.x - s * 0.4, body.position.y + 1), col, maxf(s * 0.18, 1.3))
+	draw_line(Vector2(c.x + s * 0.4, body.position.y), Vector2(c.x + s * 0.4, body.position.y + 1), col, maxf(s * 0.18, 1.3))
+	draw_rect(body.grow(1.0), COL_BG)
+	draw_rect(body, col)
+	draw_circle(Vector2(c.x, body.position.y + body.size.y * 0.42), maxf(s * 0.14, 1.0), COL_BG)
+	draw_line(Vector2(c.x, body.position.y + body.size.y * 0.42), Vector2(c.x, body.position.y + body.size.y * 0.78), COL_BG, maxf(s * 0.1, 1.0))
+
+
+func _legend_entries() -> Array:
+	return [
+		["room", COL_EXPLORED_FILL, COL_EXPLORED_EDGE, "EXPLORED"],
+		["room", COL_UNEXPLORED_FILL, COL_UNEXPLORED_EDGE, "UNEXPLORED"],
+		["lockroom", COL_LOCKED_FILL, COL_LOCKED_EDGE, "LOCKED ROOM"],
+		["door", COL_DOOR_OPEN, COL_DOOR_OPEN, "OPEN DOOR"],
+		["lockdoor", COL_DOOR_LOCKED, COL_DOOR_LOCKED, "LOCKED DOOR"],
+		["you", COL_YOU, COL_YOU, "YOU ARE HERE"],
+	] + ([["restricted", COL_LOCKED_FILL, COL_RESTRICTED, "RESTRICTED"]] if _any_restricted() else [])
+
+
+func _draw_legend() -> void:
+	if _legend_vertical():
+		_draw_legend_vertical()
+	else:
+		_draw_legend_horizontal()
+
+
+func _draw_legend_vertical() -> void:
+	var x0 := size.x - LEGEND_W
+	draw_line(Vector2(x0, 10), Vector2(x0, size.y - 10), COL_FRAME, 1.0)
+	var fs := 12
+	var y := 30.0
+	draw_string(_font_mono, Vector2(x0 + 16, y), "LEGEND", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, COL_LABEL_DIM)
+	y += 28.0
+	for e in _legend_entries():
+		_draw_legend_icon(e, Rect2(x0 + 16, y - 9, 22, 18))
+		draw_string(_font_mono, Vector2(x0 + 48, y + fs * 0.38), e[3], HORIZONTAL_ALIGNMENT_LEFT, -1, fs, COL_LABEL)
+		y += 34.0
+
+
+func _draw_legend_icon(e: Array, icon: Rect2) -> void:
+	var y := icon.get_center().y
+	match str(e[0]):
+		"room", "lockroom", "restricted":
+			draw_rect(icon, e[1])
+			draw_rect(icon, e[2], false, 1.5)
+			if e[0] == "lockroom":
+				_draw_lock(icon.get_center(), 8.0, COL_LOCKED_EDGE.lightened(0.25))
+			elif e[0] == "restricted":
+				draw_line(icon.position + Vector2(4, icon.size.y - 4), icon.end - Vector2(4, icon.size.y - 4), e[2], 2.0, true)
+		"door", "lockdoor":
+			var a := Vector2(icon.position.x + 1, y)
+			var b := Vector2(icon.end.x - 1, y)
+			if e[0] == "door":
+				draw_line(a, b, e[1], 2.0)
+			else:
+				_draw_dashes(a, b, e[1], 2.0)
+			draw_line(a + Vector2(0, -5), a + Vector2(0, 5), e[1], 2.0)
+			draw_line(b + Vector2(0, -5), b + Vector2(0, 5), e[1], 2.0)
+			if e[0] == "lockdoor":
+				_draw_lock(icon.get_center(), 7.5, e[1])
+		"you":
+			draw_circle(icon.get_center(), 8.0, Color(COL_YOU, 0.25))
+			draw_circle(icon.get_center(), 4.5, COL_YOU)
+
+
+func _draw_legend_horizontal() -> void:
+	var y := size.y - LEGEND_H * 0.5 - 4.0
+	draw_line(Vector2(10, size.y - LEGEND_H - 2.0), Vector2(size.x - 10, size.y - LEGEND_H - 2.0), COL_FRAME, 1.0)
+	var entries := [
+		["room", COL_EXPLORED_FILL, COL_EXPLORED_EDGE, "EXPLORED"],
+		["room", COL_UNEXPLORED_FILL, COL_UNEXPLORED_EDGE, "UNEXPLORED"],
+		["lockroom", COL_LOCKED_FILL, COL_LOCKED_EDGE, "LOCKED"],
+		["door", COL_DOOR_OPEN, COL_DOOR_OPEN, "OPEN DOOR"],
+		["lockdoor", COL_DOOR_LOCKED, COL_DOOR_LOCKED, "LOCKED DOOR"],
+		["you", COL_YOU, COL_YOU, "YOU ARE HERE"],
+	]
+	if _any_restricted():
+		entries.append(["restricted", COL_LOCKED_FILL, COL_RESTRICTED, "RESTRICTED"])
+	var fs := 11
+	var total := 0.0
+	var widths: Array[float] = []
+	for e in entries:
+		var w := 26.0 + _font_mono.get_string_size(e[3], HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x + 18.0
+		widths.append(w)
+		total += w
+	var x := maxf(10.0, (size.x - total) * 0.5)
+	for i in entries.size():
+		var e: Array = entries[i]
+		var icon := Rect2(x, y - 7, 18, 14)
+		match str(e[0]):
+			"room", "lockroom", "restricted":
+				draw_rect(icon, e[1])
+				draw_rect(icon, e[2], false, 1.5)
+				if e[0] == "lockroom":
+					_draw_lock(icon.get_center(), 7.0, COL_LOCKED_EDGE.lightened(0.25))
+				elif e[0] == "restricted":
+					draw_line(icon.position + Vector2(3, icon.size.y - 3), icon.end - Vector2(3, icon.size.y - 3), e[2], 2.0, true)
+			"door", "lockdoor":
+				var a := Vector2(icon.position.x + 1, y)
+				var b := Vector2(icon.end.x - 1, y)
+				if e[0] == "door":
+					draw_line(a, b, e[1], 2.0)
+				else:
+					_draw_dashes(a, b, e[1], 2.0)
+				draw_line(a + Vector2(0, -4), a + Vector2(0, 4), e[1], 2.0)
+				draw_line(b + Vector2(0, -4), b + Vector2(0, 4), e[1], 2.0)
+				if e[0] == "lockdoor":
+					_draw_lock(icon.get_center(), 6.5, e[1])
+			"you":
+				draw_circle(icon.get_center(), 7.0, Color(COL_YOU, 0.25))
+				draw_circle(icon.get_center(), 4.0, COL_YOU)
+		draw_string(_font_mono, Vector2(x + 24, y + fs * 0.38), e[3], HORIZONTAL_ALIGNMENT_LEFT, -1, fs, COL_LABEL_DIM)
+		x += widths[i]
+
+
+# ---------------------------------------------------------------- geometry helpers
+
+func _room_center(id: String) -> Vector2:
+	var room: Dictionary = (map_data.get("rooms", {}) as Dictionary).get(id, {})
+	if room.is_empty():
+		return Vector2.INF
+	var pts := PackedVector2Array()
+	for p in room.get("poly", []):
+		pts.append(p)
+	if room.has("center"):
+		return room["center"]
+	return _poly_center(pts)
+
+
+## Label anchor: centroid of the largest rectangle-ish part (area-weighted centroid).
+func _poly_center(pts: PackedVector2Array) -> Vector2:
+	var a := 0.0
+	var cx := 0.0
+	var cy := 0.0
+	for i in pts.size():
+		var p0 := pts[i]
+		var p1 := pts[(i + 1) % pts.size()]
+		var cr := p0.x * p1.y - p1.x * p0.y
+		a += cr
+		cx += (p0.x + p1.x) * cr
+		cy += (p0.y + p1.y) * cr
+	if absf(a) < 0.001:
+		var s := Vector2.ZERO
+		for p in pts:
+			s += p
+		return s / maxf(1.0, pts.size())
+	a *= 0.5
+	var c := Vector2(cx / (6.0 * a), cy / (6.0 * a))
+	if not Geometry2D.is_point_in_polygon(c, pts):
+		# concave (the L room): fall back to the widest horizontal slice's middle
+		var best := c
+		var best_w := 0.0
+		var b := Rect2(pts[0], Vector2.ZERO)
+		for p in pts:
+			b = b.expand(p)
+		for k in range(1, 20):
+			var yy := b.position.y + b.size.y * k / 20.0
+			var w := _poly_width_at(pts, yy)
+			if w > best_w:
+				best_w = w
+				best = Vector2(_slice_mid(pts, yy), yy)
+		return best
+	return c
+
+
+func _poly_width_at(pts: PackedVector2Array, y: float) -> float:
+	var xs := _slice_xs(pts, y)
+	return (xs[1] - xs[0]) if xs.size() >= 2 else 0.0
+
+
+func _slice_mid(pts: PackedVector2Array, y: float) -> float:
+	var xs := _slice_xs(pts, y)
+	return (xs[0] + xs[1]) * 0.5 if xs.size() >= 2 else pts[0].x
+
+
+func _slice_xs(pts: PackedVector2Array, y: float) -> Array[float]:
+	var xs: Array[float] = []
+	for i in pts.size():
+		var a := pts[i]
+		var b := pts[(i + 1) % pts.size()]
+		if (a.y <= y and b.y > y) or (b.y <= y and a.y > y):
+			xs.append(a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x))
+	xs.sort()
+	return xs
+
+
+func room_at(local_pos: Vector2) -> String:
+	for id in (map_data.get("rooms", {}) as Dictionary):
+		var pts := _screen_poly(map_data["rooms"][id])
+		if pts.size() >= 3 and Geometry2D.is_point_in_polygon(local_pos, pts):
+			return str(id)
+	return ""
+
+
+## ---- public geometry (local coordinates of this view; for the map walkthrough) ----
+
+## Screen-space polygon of a room (empty if unknown).
+func room_poly_local(id: String) -> PackedVector2Array:
+	var room: Dictionary = (map_data.get("rooms", {}) as Dictionary).get(id, {})
+	if room.is_empty() or size.x <= 0.0:
+		return PackedVector2Array()
+	_update_xform()
+	return _screen_poly(room)
+
+
+func room_rect_local(id: String) -> Rect2:
+	return _pts_rect(room_poly_local(id))
+
+
+## Every room together (the ship outline).
+func ship_rect_local() -> Rect2:
+	var r := Rect2()
+	var have := false
+	for id in (map_data.get("rooms", {}) as Dictionary):
+		var rr := room_rect_local(str(id))
+		if rr.size == Vector2.ZERO:
+			continue
+		r = rr if not have else r.merge(rr)
+		have = true
+	return r
+
+
+func _pts_rect(pts: PackedVector2Array) -> Rect2:
+	if pts.is_empty():
+		return Rect2()
+	var r := Rect2(pts[0], Vector2.ZERO)
+	for q in pts:
+		r = r.expand(q)
+	return r
+
+
+## Door "a|b" (order-insensitive): its bracket's rect, lock included.
+func door_rect_local(key: String) -> Rect2:
+	var d := find_door(key)
+	if d.is_empty() or size.x <= 0.0:
+		return Rect2()
+	_update_xform()
+	var c: Vector2 = _xf * (d.get("pos", Vector2.ZERO) as Vector2)
+	var half := maxf(9.0 * _scale(), 5.0)
+	var ext := Vector2(half, maxf(clampf(_scale() * 6.0, 6.5, 12.0), 3.0 * _scale())) if str(d.get("axis", "h")) == "h" \
+		else Vector2(maxf(clampf(_scale() * 6.0, 6.5, 12.0), 3.0 * _scale()), half)
+	return Rect2(c - ext, ext * 2.0)
+
+
+func find_door(key: String) -> Dictionary:
+	var parts := key.split("|", false)
+	if parts.size() < 2:
+		return {}
+	var a := parts[0].strip_edges()
+	var b := parts[1].strip_edges()
+	for d: Dictionary in map_data.get("doors", []):
+		var da := str(d.get("a", ""))
+		var db := str(d.get("b", ""))
+		if (da == a and db == b) or (da == b and db == a):
+			return d
+	return {}
+
+
+## Centre of the you-are-here dot (Vector2.INF if none).
+func you_pos_local() -> Vector2:
+	var c := _room_center(str(map_data.get("current", "")))
+	if c == Vector2.INF or size.x <= 0.0:
+		return Vector2.INF
+	_update_xform()
+	return _xf * c
+
+
+func room_state(id: String) -> String:
+	return str(((map_data.get("rooms", {}) as Dictionary).get(id, {}) as Dictionary).get("state", ""))

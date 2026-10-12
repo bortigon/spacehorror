@@ -1,0 +1,147 @@
+{
+  "format": 1,
+  "id": "writer_demo",
+  "title": "SAMPLE SCENE // SCENE WRITER DEMO",
+  "speed": 38,
+  "background": "res://assets/space.png",
+  "background_alpha": 0.12,
+  "ambience": "",
+  "show_hud": true,
+  "ui": "stage",
+  "fade_in": 0.0,
+  "after": "intro:home_bunk",
+  "screens": [
+    {
+      "id": "wake",
+      "heading": "Sample Scene",
+      "text": "This is a SAMPLE scene made with the Scene Writer. Replace it with your own.[pause=0.8]\n\nThe lights come up one panel at a time.[pause=0.6]\nSomewhere below the deck, something [shake]knocks twice[/shake].\nThen nothing.",
+      "speed": 0,
+      "shake": 0,
+      "red": {
+        "mode": "off",
+        "from": 0.0,
+        "to": 0.0
+      },
+      "vo": {
+        "clip": "",
+        "from": 0.0,
+        "to": -1.0,
+        "cues": []
+      },
+      "sfx": [
+        {
+          "clip": "res://assets/sounds/UI-4.mp3",
+          "line": 3
+        }
+      ],
+      "question": "",
+      "end": {
+        "type": "continue",
+        "goto": "next"
+      }
+    },
+    {
+      "id": "file",
+      "heading": "",
+      "text": "REC-7 has your file open.\nThe name [error=ERROR]ALEX[/error] is not the name we have on file.\nRecord status: [error]CORRUPTED[/error].\nDo you want to continue?",
+      "speed": 0,
+      "shake": 0,
+      "red": {
+        "mode": "static",
+        "from": 0.15,
+        "to": 0.15
+      },
+      "vo": {
+        "clip": "",
+        "from": 0.0,
+        "to": -1.0,
+        "cues": []
+      },
+      "sfx": [],
+      "question": "",
+      "end": {
+        "type": "choices",
+        "choices": [
+          {
+            "label": "YES",
+            "goto": "vent",
+            "ops": [
+              "set_flag:sample_said_yes"
+            ],
+            "if": ""
+          },
+          {
+            "label": "NO",
+            "goto": "refuse",
+            "ops": [],
+            "if": ""
+          }
+        ]
+      }
+    },
+    {
+      "id": "vent",
+      "heading": "",
+      "text": "Acknowledged, Operator.\nOxygen in this section is venting.\nAir remaining: [shake=12]falling[/shake].",
+      "speed": 0,
+      "shake": 3,
+      "red": {
+        "mode": "ramp",
+        "from": 0.1,
+        "to": 0.55
+      },
+      "vo": {
+        "clip": "res://assets/sounds/memorytestA.wav",
+        "from": 0.0,
+        "to": -1.0,
+        "cues": [
+          [
+            0.0,
+            1.4
+          ]
+        ]
+      },
+      "sfx": [
+        {
+          "clip": "res://assets/sounds/airlockdoor.mp3",
+          "line": 2
+        }
+      ],
+      "question": "",
+      "end": {
+        "type": "qte",
+        "label": "SEAL THE VENT",
+        "seconds": 8.0,
+        "goto": "intro:home_bunk",
+        "fail_message": "SAMPLE ENDING // OXYGEN DEPLETED",
+        "retry": ""
+      }
+    },
+    {
+      "id": "refuse",
+      "heading": "",
+      "text": "Refusal logged.\nThe REC-7 corporation regrets to inform you that this is a [error]SAMPLE[/error] death screen.",
+      "speed": 30,
+      "shake": 0,
+      "red": {
+        "mode": "ramp",
+        "from": 0.2,
+        "to": 0.8
+      },
+      "vo": {
+        "clip": "",
+        "from": 0.0,
+        "to": -1.0,
+        "cues": []
+      },
+      "sfx": [],
+      "question": "",
+      "end": {
+        "type": "death",
+        "heading": "SIGNAL LOST",
+        "message": "SAMPLE ENDING // THE FILE WAS CLOSED",
+        "retry": "file"
+      }
+    }
+  ]
+}

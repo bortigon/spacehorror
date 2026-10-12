@@ -1,0 +1,688 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://templates/pda_screen.gd" id="1_script"]
+[ext_resource type="Theme" path="res://templates/pda_theme.tres" id="2_theme"]
+[ext_resource type="Shader" path="res://shaders/screen_refresh.gdshader" id="3_shader"]
+[ext_resource type="Texture2D" path="res://assets/journal_button.png" id="5_jbtn"]
+[ext_resource type="Texture2D" path="res://assets/journal_button_pressed.png" id="6_jbtnp"]
+[ext_resource type="AudioStream" path="res://assets/ambientshipinterior.mp3" id="7_amb"]
+[ext_resource type="AudioStream" path="res://assets/sounds/UI-4.mp3" id="8_sfx_open"]
+[ext_resource type="AudioStream" path="res://assets/sounds/UI-6.mp3" id="9_sfx_close"]
+[ext_resource type="AudioStream" path="res://assets/sounds/UI-1.mp3" id="10_sfx_tap"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_refresh"]
+shader = ExtResource("3_shader")
+shader_parameter/scanline_count = 180.0
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_page"]
+content_margin_left = 18.0
+content_margin_top = 14.0
+content_margin_right = 18.0
+content_margin_bottom = 14.0
+bg_color = Color(0.03, 0.05, 0.04, 0.97)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.435, 0.749, 0.451, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_pause"]
+content_margin_left = 24.0
+content_margin_top = 20.0
+content_margin_right = 24.0
+content_margin_bottom = 20.0
+bg_color = Color(0.03, 0.05, 0.04, 0.98)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.435, 0.749, 0.451, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_frame"]
+bg_color = Color(0, 0, 0, 0)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.22, 0.38, 0.26, 0.7)
+
+[node name="PdaScreen" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme = ExtResource("2_theme")
+script = ExtResource("1_script")
+
+[node name="Screen" type="ColorRect" parent="."]
+unique_name_in_owner = true
+material = SubResource("ShaderMaterial_refresh")
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 1)
+
+[node name="Backdrop" type="TextureRect" parent="."]
+unique_name_in_owner = true
+visible = false
+modulate = Color(1, 1, 1, 0.3)
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 6
+
+[node name="Frame" type="Panel" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_frame")
+
+[node name="SafeArea" type="MarginContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/margin_left = 14
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 14
+theme_override_constants/margin_bottom = 10
+
+[node name="Layout" type="VBoxContainer" parent="SafeArea"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 6
+
+[node name="Header" type="HBoxContainer" parent="SafeArea/Layout"]
+unique_name_in_owner = true
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 10
+
+[node name="HeaderLines" type="VBoxContainer" parent="SafeArea/Layout/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_filter = 2
+theme_override_constants/separation = 1
+
+[node name="OsName" type="Label" parent="SafeArea/Layout/Header/HeaderLines"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"OsLabelDim"
+text = "REC-7 // CLAIMSIDE OS"
+
+[node name="OsLine" type="Label" parent="SafeArea/Layout/Header/HeaderLines"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"OsLabel"
+text = "OPERATOR: UNASSIGNED"
+autowrap_mode = 3
+
+[node name="CommsLine" type="Label" parent="SafeArea/Layout/Header/HeaderLines"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_type_variation = &"CommsLabel"
+text = "COMMS> ..."
+autowrap_mode = 3
+
+[node name="Hourglass" type="HBoxContainer" parent="SafeArea/Layout/Header"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+size_flags_vertical = 0
+mouse_filter = 2
+theme_override_constants/separation = 6
+
+[node name="HourglassIcon" type="Control" parent="SafeArea/Layout/Header/Hourglass"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(14, 22)
+layout_mode = 2
+size_flags_vertical = 4
+mouse_filter = 2
+
+[node name="TimeLabel" type="Label" parent="SafeArea/Layout/Header/Hourglass"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"TimeLabel"
+text = "12"
+
+[node name="JournalButton" type="TextureButton" parent="SafeArea/Layout/Header"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(40, 40)
+layout_mode = 2
+size_flags_vertical = 0
+tooltip_text = "Locker (L)"
+ignore_texture_size = true
+stretch_mode = 5
+texture_normal = ExtResource("5_jbtn")
+texture_pressed = ExtResource("6_jbtnp")
+
+[node name="HeaderRule" type="HSeparator" parent="SafeArea/Layout"]
+layout_mode = 2
+mouse_filter = 2
+
+[node name="Body" type="HBoxContainer" parent="SafeArea/Layout"]
+layout_mode = 2
+size_flags_vertical = 3
+mouse_filter = 2
+theme_override_constants/separation = 10
+
+[node name="Tabs" type="VBoxContainer" parent="SafeArea/Layout/Body"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(88, 0)
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="TabLog" type="Button" parent="SafeArea/Layout/Body/Tabs"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+theme_type_variation = &"TabButtonActive"
+text = "LOG"
+
+[node name="TabDeck" type="Button" parent="SafeArea/Layout/Body/Tabs"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+theme_type_variation = &"TabButton"
+text = "DECK"
+
+[node name="TabLocker" type="Button" parent="SafeArea/Layout/Body/Tabs"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+theme_type_variation = &"TabButton"
+text = "LOCKER"
+
+[node name="TabKit" type="Button" parent="SafeArea/Layout/Body/Tabs"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+theme_type_variation = &"TabButton"
+text = "KIT"
+
+[node name="RailSpacer" type="Control" parent="SafeArea/Layout/Body/Tabs"]
+layout_mode = 2
+size_flags_vertical = 3
+mouse_filter = 2
+
+[node name="MainCol" type="VBoxContainer" parent="SafeArea/Layout/Body"]
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_filter = 2
+theme_override_constants/separation = 4
+
+[node name="Title" type="Label" parent="SafeArea/Layout/Body/MainCol"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"TitleLabel"
+text = "LOCATION"
+text_overrun_behavior = 3
+
+[node name="Views" type="Control" parent="SafeArea/Layout/Body/MainCol"]
+layout_mode = 2
+size_flags_vertical = 3
+mouse_filter = 2
+
+[node name="LogView" type="HBoxContainer" parent="SafeArea/Layout/Body/MainCol/Views"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/separation = 12
+
+[node name="StoryText" type="RichTextLabel" parent="SafeArea/Layout/Body/MainCol/Views/LogView"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+bbcode_enabled = true
+focus_mode = 0
+text = "Story text goes here."
+meta_underlined = false
+
+[node name="ChoicesCol" type="VBoxContainer" parent="SafeArea/Layout/Body/MainCol/Views/LogView"]
+custom_minimum_size = Vector2(280, 0)
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 6
+
+[node name="ChoicesHeader" type="Label" parent="SafeArea/Layout/Body/MainCol/Views/LogView/ChoicesCol"]
+layout_mode = 2
+theme_type_variation = &"OsLabelDim"
+text = "ACTIONS"
+
+[node name="Choices" type="VBoxContainer" parent="SafeArea/Layout/Body/MainCol/Views/LogView/ChoicesCol"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+mouse_filter = 2
+theme_override_constants/separation = 6
+
+[node name="MiniMapFrame" type="VBoxContainer" parent="SafeArea/Layout/Body/MainCol/Views/LogView/ChoicesCol"]
+unique_name_in_owner = true
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 3
+
+[node name="MiniMapHeader" type="Label" parent="SafeArea/Layout/Body/MainCol/Views/LogView/ChoicesCol/MiniMapFrame"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"OsLabelDim"
+text = "VESSEL MAP"
+text_overrun_behavior = 3
+
+[node name="MiniMapHost" type="Control" parent="SafeArea/Layout/Body/MainCol/Views/LogView/ChoicesCol/MiniMapFrame"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 150)
+layout_mode = 2
+mouse_filter = 2
+
+[node name="DeckView" type="VBoxContainer" parent="SafeArea/Layout/Body/MainCol/Views"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/separation = 4
+
+[node name="DeckAspect" type="Label" parent="SafeArea/Layout/Body/MainCol/Views/DeckView"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"OsLabel"
+text = "ASPECT: -"
+
+[node name="DeckHint" type="Label" parent="SafeArea/Layout/Body/MainCol/Views/DeckView"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"OsLabelDim"
+text = ""
+autowrap_mode = 3
+
+[node name="DeckMap" type="Control" parent="SafeArea/Layout/Body/MainCol/Views/DeckView"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+mouse_filter = 2
+
+[node name="LockerView" type="VBoxContainer" parent="SafeArea/Layout/Body/MainCol/Views"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/separation = 6
+
+[node name="LockerHeader" type="Label" parent="SafeArea/Layout/Body/MainCol/Views/LockerView"]
+layout_mode = 2
+theme_type_variation = &"OsLabel"
+text = "LOCKER // FILED DOSSIERS"
+
+[node name="LockerScroll" type="ScrollContainer" parent="SafeArea/Layout/Body/MainCol/Views/LockerView"]
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="LockerList" type="VBoxContainer" parent="SafeArea/Layout/Body/MainCol/Views/LockerView/LockerScroll"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
+[node name="KitView" type="VBoxContainer" parent="SafeArea/Layout/Body/MainCol/Views"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/separation = 6
+
+[node name="KitHeader" type="Label" parent="SafeArea/Layout/Body/MainCol/Views/KitView"]
+layout_mode = 2
+theme_type_variation = &"OsLabel"
+text = "KIT // CARRIED"
+
+[node name="KitScroll" type="ScrollContainer" parent="SafeArea/Layout/Body/MainCol/Views/KitView"]
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="KitList" type="VBoxContainer" parent="SafeArea/Layout/Body/MainCol/Views/KitView/KitScroll"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
+[node name="ChapterPlate" type="Control" parent="."]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="PlateDim" type="ColorRect" parent="ChapterPlate"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 0.95)
+
+[node name="PlateBox" type="VBoxContainer" parent="ChapterPlate"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 40.0
+offset_right = -40.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/separation = 8
+alignment = 1
+
+[node name="PlateTitle" type="Label" parent="ChapterPlate/PlateBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"PlateTitle"
+text = "CHAPTER"
+horizontal_alignment = 1
+
+[node name="PlateSub" type="Label" parent="ChapterPlate/PlateBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"OsLabel"
+text = ""
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="PlateHint" type="Label" parent="ChapterPlate/PlateBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"OsLabelDim"
+text = ""
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="JournalPopup" type="Control" parent="."]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Dim" type="ColorRect" parent="JournalPopup"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.55)
+
+[node name="Page" type="PanelContainer" parent="JournalPopup"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -250.0
+offset_top = -150.0
+offset_right = 250.0
+offset_bottom = 150.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_page")
+
+[node name="VBox" type="VBoxContainer" parent="JournalPopup/Page"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="PopupMeta" type="Label" parent="JournalPopup/Page/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"OsLabelDim"
+text = "DOSSIER"
+autowrap_mode = 3
+
+[node name="PopupTitle" type="Label" parent="JournalPopup/Page/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"DossierTitle"
+text = "Title"
+autowrap_mode = 3
+
+[node name="HSeparator" type="HSeparator" parent="JournalPopup/Page/VBox"]
+layout_mode = 2
+
+[node name="PopupBody" type="RichTextLabel" parent="JournalPopup/Page/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/line_separation = 3
+theme_override_font_sizes/normal_font_size = 14
+theme_override_font_sizes/bold_font_size = 14
+theme_override_font_sizes/italics_font_size = 14
+bbcode_enabled = true
+text = "Body"
+meta_underlined = false
+
+[node name="CloseButton" type="Button" parent="JournalPopup/Page/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+text = "Close"
+
+
+[node name="MapOverlay" type="Control" parent="."]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="MapDim" type="ColorRect" parent="MapOverlay"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.72)
+
+[node name="MapPage" type="PanelContainer" parent="MapOverlay"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 28.0
+offset_top = 18.0
+offset_right = -28.0
+offset_bottom = -18.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_page")
+
+[node name="MapBox" type="VBoxContainer" parent="MapOverlay/MapPage"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="MapHeaderRow" type="HBoxContainer" parent="MapOverlay/MapPage/MapBox"]
+layout_mode = 2
+
+[node name="MapTitles" type="VBoxContainer" parent="MapOverlay/MapPage/MapBox/MapHeaderRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 0
+
+[node name="MapTitle" type="Label" parent="MapOverlay/MapPage/MapBox/MapHeaderRow/MapTitles"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"DossierTitle"
+text = "RSV VESSEL"
+
+[node name="MapSubtitle" type="Label" parent="MapOverlay/MapPage/MapBox/MapHeaderRow/MapTitles"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"OsLabelDim"
+text = "DECK SCHEMATIC"
+
+[node name="MapCloseButton" type="Button" parent="MapOverlay/MapPage/MapBox/MapHeaderRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 32)
+layout_mode = 2
+text = "Close"
+
+[node name="MapHost" type="Control" parent="MapOverlay/MapPage/MapBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+mouse_filter = 2
+
+[node name="MapInfo" type="Label" parent="MapOverlay/MapPage/MapBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"OsLabel"
+text = "LOCATION: -"
+
+[node name="PauseMenu" type="Control" parent="."]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="PauseDim" type="ColorRect" parent="PauseMenu"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.72)
+
+[node name="PausePanel" type="PanelContainer" parent="PauseMenu"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -160.0
+offset_top = -120.0
+offset_right = 160.0
+offset_bottom = 120.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_pause")
+
+[node name="PauseBox" type="VBoxContainer" parent="PauseMenu/PausePanel"]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="PauseTitle" type="Label" parent="PauseMenu/PausePanel/PauseBox"]
+layout_mode = 2
+theme_type_variation = &"PauseTitle"
+text = "PAUSED"
+horizontal_alignment = 1
+
+[node name="ResumeButton" type="Button" parent="PauseMenu/PausePanel/PauseBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+text = "Resume"
+
+[node name="FullscreenButton" type="Button" parent="PauseMenu/PausePanel/PauseBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+text = "Fullscreen"
+
+[node name="QuitButton" type="Button" parent="PauseMenu/PausePanel/PauseBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+text = "Quit"
+
+[node name="Ambience" type="AudioStreamPlayer" parent="."]
+unique_name_in_owner = true
+stream = ExtResource("7_amb")
+bus = &"Music"
+
+[node name="SfxOpen" type="AudioStreamPlayer" parent="."]
+unique_name_in_owner = true
+stream = ExtResource("8_sfx_open")
+volume_db = -4.0
+bus = &"Sfx"
+
+[node name="SfxClose" type="AudioStreamPlayer" parent="."]
+unique_name_in_owner = true
+stream = ExtResource("9_sfx_close")
+volume_db = -3.0
+bus = &"Sfx"
+
+[node name="SfxTap" type="AudioStreamPlayer" parent="."]
+unique_name_in_owner = true
+stream = ExtResource("10_sfx_tap")
+bus = &"Sfx"
