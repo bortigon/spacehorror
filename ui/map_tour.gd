@@ -6,7 +6,7 @@ extends Control
 ## Blocks map clicks while it is up. Used by templates/authored_scene.gd ("map_tour" ending).
 ##
 ## Targets:  map            the whole ship + the yellow you-are-here dot
-##           room:<id>      one room (e.g. room:stasis_15)
+##           room:<id>      one room (e.g. room:stasis_3)
 ##           door:<a>|<b>   one door / passage (e.g. door:ready_room|stbd_hold)
 ##           rooms          every room (the clickable rooms)
 

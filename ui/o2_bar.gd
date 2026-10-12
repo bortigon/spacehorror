@@ -13,6 +13,7 @@ const COL_EMPTY := Color(0.2, 0.3, 0.24, 0.55)
 const COL_LABEL := Color(0.56, 0.8, 0.6, 1)
 const BAR_H := 14.0        # bar height (the hour cells use the same)
 const TOTAL_H := 32.0      # bar + the label row under it
+const HUD_W := 200.0       # header bar length; the hour bar next to it is the same length
 
 var level := 100.0        # 0..100 as displayed
 var danger := 0.0         # 0..1
@@ -23,7 +24,7 @@ var _last_tick := TICKS
 
 
 func _init() -> void:
-	custom_minimum_size = Vector2(200, TOTAL_H)
+	custom_minimum_size = Vector2(HUD_W, TOTAL_H)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 

@@ -28,7 +28,7 @@ extends Control
 ##     "comms":    ["LINE ONE", "LINE 2"], # optional companion lines in the header
 ##     "body":     "Prose with [[dossier_id|green link]] and {flag:x?shown if x|else}.",
 ##     "on_enter": ["arm_window:12"],      # ops run every time the passage is entered
-##     "map_room": "stasis_15",             # optional: vessel-map room you are in here
+##     "map_room": "stasis_3",             # optional: vessel-map room you are in here
 ##     "choices":  [ { "label": "Take the lamp",
 ##                     "goto": "next_passage",   # optional; no goto = stay and redraw
 ##                     "ops": ["give_item:worklamp"],
@@ -165,7 +165,9 @@ const MAP_MSG_HERE := "YOU ARE HERE"
 const MAP_MSG_NO_PASSAGE := "NO ACCESSIBLE PASSAGE"
 const MAP_MSG_KEYCARD := "KEYCARD REQUIRED"
 const MAP_MSG_RESTRICTED := "RESTRICTED"
-const MAP_MSG_COLOR := Color(0.95, 0.66, 0.3)
+const MAP_MSG_COLOR := Color(0.50, 0.06, 0.03)   # refusals: dark red on the holo green window footer
+const MAP_BANNER_WARN := Color(0.95, 0.66, 0.3)   # minimap banner refusals on the dark map (pre-round-7 amber)
+const MAP_INK := Color(0.03, 0.13, 0.05, 1.0)       # map page text on the holo green (HoloWindow INK)
 const MAP_MSG_SECONDS := 2.2
 const MAP_MOVE_SFX := "res://assets/sounds/dooropen.mp3"
 var map_locked_open := false            # walkthrough: the full map can't be closed
@@ -201,12 +203,27 @@ const INV_PLACEHOLDERS := []
 ## Item ids that get a "Put on" button in the character screen (everything gets "Drop").
 const WEARABLE_IDS: Array[String] = ["suit"]
 const SUIT_ID := &"suit"
+const CONSUMABLE_IDS: Array[String] = ["thermos_coffee"]
+const THERMOS_ID := &"thermos_coffee"
+const THERMOS_LABEL := "THERMOS OF COFFEE"
+const THERMOS_DETAIL := "Hot coffee. Drinking it gives one free action: your next action that takes time costs 1 hr less."
 const ZIPPER_SFX := "res://assets/sounds/zipper.wav"
 const ERROR_SFX := "res://assets/sounds/error.wav"
-const UNLOCK_SFX := "res://assets/sounds/unlock.wav"
+const UNLOCK_SFX := "res://assets/sounds/unlock.wav"   # latch click (synthesized, kept)
+## Item / door sounds from David's sound folder (assets/sounds; there is no separate sfx folder):
+##   loot   = UI-3.mp3       an item dragged into the inventory (unused elsewhere)
+##   drop   = UI-5.mp3       an item dropped on the floor or into a container (unused elsewhere)
+##   unlock = dooropen.mp3   a door unlocked with its keycard (after the synthesized latch click)
+const LOOT_SFX := "res://assets/sounds/UI-3.mp3"
+const DROP_SFX := "res://assets/sounds/UI-5.mp3"
+const DOOR_UNLOCK_SFX := "res://assets/sounds/dooropen.mp3"
+## Every play_sfx kind and file sound, newest last (tests read it).
+var sfx_log: Array = []
 const FLOOR_ACT := "floor"
 ## Dropped items: this many cells along the bottom of a room; more than this become one PILE marker.
-const DROP_SLOTS := 3
+## Dropped items on the map: 2 columns x 3 rows of dot cells around the room's name (5 dots + a PILE dot).
+const DROP_COLS := 2
+const DROP_SLOTS := 6
 const SUIT_FADE_IN := 0.32
 const SUIT_FADE_HOLD := 0.22
 const SUIT_FADE_OUT := 0.45
@@ -933,6 +950,10 @@ func show_tab(tab: int, click := false) -> void:
 
 
 func _on_tab_pressed(tab: int) -> void:
+	if tab == Tab.LOG and excursion_chrome:
+		show_tab(tab, false)
+		open_game_tab("log")    # game UI: the LOG tab opens the LOG pop-up over the story
+		return
 	show_tab(tab, true)
 
 
@@ -961,10 +982,11 @@ func set_excursion_chrome(on: bool) -> void:
 	_ensure_inv()
 	time_box.visible = on
 	time_bar.visible = on
-	inv_button.visible = on
+	_apply_rail()
 	for i in [Tab.DECK, Tab.LOCKER, Tab.KIT]:
 		tab_buttons[i].visible = not on
 	if on:
+		journal_button.hide()      # the game HUD has no menu button (INV tab / hotkeys open the character screen)
 		journal_button.tooltip_text = "Inventory"
 		if current_tab in [Tab.DECK, Tab.LOCKER, Tab.KIT]:
 			show_tab(Tab.LOG)
@@ -995,6 +1017,7 @@ func spend_time_blocks(n: int) -> bool:
 ## only enforced once the hour blocks are live (the ready room arms them). 0 left = "NO HOURS LEFT".
 ## Running out has no game-over rule yet: every action that costs hours is simply refused.
 func hours_refusal(n: int) -> String:
+	n = effective_hours(n)
 	if n < 1 or not time_blocks_live:
 		return ""
 	if time_blocks <= 0:
@@ -1004,12 +1027,134 @@ func hours_refusal(n: int) -> String:
 	return ""
 
 
+## Hours an action of `n` really costs: a drunk THERMOS OF COFFEE (vars.free_hours charges) takes 1 hr
+## off the next time-costing action (minimum 0).
+func effective_hours(n: int) -> int:
+	if n < 1:
+		return 0
+	return maxi(0, n - free_hour_charges())
+
+
+func free_hour_charges() -> int:
+	return maxi(0, int(vars.get("free_hours", 0)))
+
+
 ## Spends n hours for an action that is allowed (call hours_refusal first). True once they are spent
 ## (also true for a free action, or while the blocks are not live yet).
 func spend_hours(n: int) -> bool:
 	if n < 1 or not time_blocks_live:
 		return true
-	return spend_time_blocks(n)
+	var eff := effective_hours(n)
+	if free_hour_charges() > 0:
+		vars["free_hours"] = free_hour_charges() - 1   # the coffee is used up by this action
+		vars["free_hours_used"] = int(vars.get("free_hours_used", 0)) + 1
+	if eff < 1:
+		return true
+	return spend_time_blocks(eff)
+
+
+## 1 -> "1 hr", 2 -> "2 hrs".
+static func hours_label(hrs: int) -> String:
+	return "1 hr" if hrs == 1 else "%d hrs" % hrs
+
+
+## A ship LOG entry (the RSV ABEYANCE one in the ready room window): filed once, shown on the LOG
+## tab. It is also a dossier, so it is carried with the other filed entries.
+## vars["log_entries"] = [{id, title, text}] is the record. Returns true the first time.
+func file_log_entry(entry_id: String, title: String, text: String, filed := "SHIP LOG", category := "SHIP") -> bool:
+	var list: Array = vars.get("log_entries", [])
+	for e: Dictionary in list:
+		if str(e.get("id", "")) == entry_id:
+			return false
+	list.append({"id": entry_id, "title": title, "text": text, "category": category.to_upper()})
+	vars["log_entries"] = list
+	dossiers[StringName(entry_id)] = {"title": title, "filed": filed, "body": text}
+	unlock_dossier(StringName(entry_id))
+	return true
+
+
+## ---- the LOG pop-up (ui/log_window.gd) ----
+## Categories: SHIP (found entries, e.g. RSV ABEYANCE), COMPANY (REC-7 Corporation, from the start:
+## the intro told the player all of it) and TUTORIALS (one entry per tip once that tip has been seen).
+## REC-7 Corporation: ONLY lines the game already says (data/memory_exam.gd Q2 "Insurance?" answer,
+## CUES_FUNCTION_YES, CUES_SPECIAL; story/scenes/excursion1_prep.json "Everything you do aboard any
+## REC-7 vessel is recorded.").
+const LOG_REC7 := {"id": "rec7", "title": "REC-7 Corporation", "category": "COMPANY",
+	"text": "The REC-7 Corporation provides premium insurance policies to other corporations operating across the known universe.\n\n"
+		+ "You are a CLAIM OPERATOR. Your function is to investigate insurance claims for REC-7 Policy Holders. Most often, this involves lost or derelict space ships, missing persons, or missing cargo.\n\n"
+		+ "You must assess whether CATASTROPHIC ECONOMIC DAMAGE (CED) has occurred, and if so, determine whether the nature of the CATASTROPHIC ECONOMIC DAMAGE is covered by the REC-7 Insurance Policy Agreement. If the cause is covered, then the Policy Holder would be entitled to a massive monetary payout.\n\n"
+		+ "SPECIAL NOTE FOR CLAIM OPERATOR: the CLAIM OPERATOR would receive a SIGNIFICANT MONETARY BONUS for discovering that the reason for the CATASTROPHIC ECONOMIC DAMAGE was NOT covered.\n\n"
+		+ "Everything you do aboard any REC-7 vessel is recorded."}
+## Tutorial entries: shown once any of `flags` is set (the tip was seen). Texts are the tips the game
+## shows (map tour in excursion1_prep.json, TUTORIALS in authored_scene.gd); Doors adds one line on
+## how a keycard is used now.
+const LOG_TUTORIALS := [
+	{"id": "tut_map", "title": "Map", "flags": ["tut_map_done", "tut_map_click_done"],
+		"text": "This is your MAP. Click on it to zoom in.\n\nThis is your TRM-CUFF Map. The yellow circle indicates your current position.\n\nGreen rooms have been explored. Dark rooms have not been explored. If a Dark Room is named, you might know what to expect, but you have not explored it.\n\nThese lines indicate doors or other passages."},
+	{"id": "tut_containers", "title": "Containers", "flags": ["tut_drag_done"],
+		"text": "Take an item from any CONTAINER by dragging and dropping it into your inventory.\n\nDrag an item from your inventory into a CONTAINER to leave it there."},
+	{"id": "tut_items", "title": "Items", "flags": ["tut_drop_done"],
+		"text": "Inventory is limited. Sometimes you may need to DROP items. Drag the item off the inventory, then click to drop it.\n\nThe item now appears on the map."},
+	{"id": "tut_doors", "title": "Doors", "flags": ["tut_map_done", "tut_doors_done"],
+		"text": "Lock symbols mean the door is locked, and you will need a KEYCARD to open it.\n\nTo use a KEYCARD, drag it off your inventory, then click the lock on the map."},
+	{"id": "tut_time", "title": "Time", "flags": ["tut_time_done"],
+		"text": "Some actions require Time.\n\nMissions are limited to 8 Hours."},
+	{"id": "tut_status", "title": "Status", "flags": ["tut_status_done"],
+		"text": "This is your STATUS screen. It shows details about your current situation."},
+	{"id": "tut_trmcuff", "title": "Menu", "flags": ["tut_menu_done"],
+		"text": "You can also find the map here, in your MENU. Click or TAB to cycle through your MENU.\n\nSTA: your current situation (closes every other screen). INV: your inventory. MAP: the ship map. More buttons appear as you earn them."},
+	{"id": "tut_inventory", "title": "Inventory", "flags": ["tut_inventory_done"],
+		"text": "This is your Inventory. Items you are holding will be shown here.\n\nClick EXIT to close."},
+	{"id": "tut_character", "title": "Character", "flags": ["tut_inventory_done"],
+		"text": "This is your Character."},
+	{"id": "tut_moving", "title": "Moving Rooms", "flags": ["tut_move_done", "tut_map_done"],
+		"text": "Click on the room you wish to move to. If there is an accessible passage, you will move there."},
+]
+
+
+## Everything the LOG lists now: [{id, title, text, category}].
+func log_entries() -> Array:
+	var out: Array = []
+	for e: Dictionary in vars.get("log_entries", []):
+		out.append({"id": str(e.get("id", "")), "title": str(e.get("title", "")), "text": str(e.get("text", "")),
+			"category": str(e.get("category", "SHIP")).to_upper()})
+	out.append((LOG_REC7 as Dictionary).duplicate())
+	for t: Dictionary in LOG_TUTORIALS:
+		for f: Variant in t["flags"]:
+			if has_flag(str(f)):
+				out.append({"id": t["id"], "title": t["title"], "text": t["text"], "category": "TUTORIALS"})
+				break
+	return out
+
+
+## The LOG tab (game UI) and links such as RSV ABEYANCE open the LOG pop-up; `select` = entry id.
+## The first time, the 3-step log tutorial runs over it and the LOG button appears in the menu.
+func open_log(select := "") -> void:
+	_ensure_windows()
+	windows.open_log(log_entries(), select)
+	if maybe_start_tutorial("log"):
+		reveal_tab("log")    # round 8: the LOG tutorial earns the LOG button (animated, persisted in vars)
+
+
+func log_open() -> bool:
+	return windows != null and windows.log_open()
+
+
+## True if dropping now would start the first-drop tips (authored_scene.gd).
+func drop_tip_pending() -> bool:
+	return false
+
+
+## Chapters with tutorials (authored_scene.gd) start walkthrough `tid` here once.
+func maybe_start_tutorial(_tid: String) -> bool:
+	return false
+
+
+func has_log_entry(entry_id: String) -> bool:
+	for e: Dictionary in vars.get("log_entries", []):
+		if str(e.get("id", "")) == entry_id:
+			return true
+	return false
 
 
 func hours_left() -> int:
@@ -1026,15 +1171,17 @@ func _ensure_time_bar() -> void:
 	time_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	time_box.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	time_box.add_theme_constant_override("separation", 2)
-	time_box.custom_minimum_size = Vector2(0, O2Bar.TOTAL_H)
+	time_box.custom_minimum_size = Vector2(O2Bar.HUD_W, O2Bar.TOTAL_H)   # as long as the O2 bar
 	time_bar = HBoxContainer.new()
 	time_bar.name = "TimeBlocks"
 	time_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	time_bar.add_theme_constant_override("separation", 3)
 	time_bar.alignment = BoxContainer.ALIGNMENT_BEGIN
+	time_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for _i in TIME_BLOCK_MAX:
 		var cell := ColorRect.new()
 		cell.custom_minimum_size = Vector2(10, O2Bar.BAR_H)
+		cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL     # the 8 cells share the bar's length
 		cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		time_bar.add_child(cell)
 	time_box.add_child(time_bar)
@@ -1088,9 +1235,191 @@ func _ensure_inv() -> void:
 	inv_button.theme_type_variation = &"TabButton"
 	inv_button.focus_mode = Control.FOCUS_NONE
 	inv_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	inv_button.pressed.connect(show_inv)
+	inv_button.pressed.connect(open_game_tab.bind("inv"))
 	tabs.add_child(inv_button)
-	tabs.move_child(inv_button, tab_buttons[0].get_index() + 1)
+	sta_button = _rail_button("TabSta", "STA", "sta")
+	tabs.add_child(sta_button)
+	map_button = _rail_button("TabMap", "MAP", "map")
+	tabs.add_child(map_button)
+	# game rail order: STA, INV, LOG, MAP
+	var log_i := tab_buttons[0].get_index()
+	tabs.move_child(sta_button, log_i)
+	tabs.move_child(inv_button, log_i + 1)
+	tabs.move_child(map_button, tab_buttons[0].get_index() + 1)
+	_apply_rail()
+	get_tree().process_frame.connect(_refresh_game_tabs)
+
+
+func _rail_button(node_name: String, text: String, tab: String) -> Button:
+	var b := Button.new()
+	b.name = node_name
+	b.text = text
+	b.custom_minimum_size = Vector2(0, 42)
+	b.theme_type_variation = &"TabButton"
+	b.focus_mode = Control.FOCUS_NONE
+	b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	b.pressed.connect(open_game_tab.bind(tab))
+	return b
+
+
+# ---- the game tab rail: STA, INV, LOG, MAP. One screen at a time; the open one is lit.
+## STA is the main game state: the room / story text with nothing else up (selecting it closes every
+## window and the full map). TAB / E cycle DOWN the rail (Shift+Tab / Q up), wrapping;
+## I and C = inventory (character screen), M = map, Esc closes the top window.
+const GAME_TABS := ["sta", "inv", "log", "map"]
+var sta_button: Button
+var map_button: Button
+
+
+## The rail entry whose screen is open now ("sta" = only the room / story text is showing).
+func active_game_tab() -> String:
+	if windows != null and windows.log_open():
+		return "log"
+	if windows != null and windows.character_open():
+		return "inv"
+	if map_overlay != null and map_overlay.visible:
+		return "map"
+	return "sta"
+
+
+func game_tab_button(tab: String) -> Button:
+	match tab:
+		"sta":
+			return sta_button
+		"inv":
+			return inv_button
+		"log":
+			return tab_buttons[Tab.LOG]
+		"map":
+			return map_button
+	return null
+
+
+## Opens rail screen `tab` (closing whatever else is open). STA = close everything (the room text).
+## Clicking the lit INV / LOG / MAP tab closes its screen (back to STA).
+func open_game_tab(tab: String) -> void:
+	if not excursion_chrome or map_locked_open or not tab_revealed(tab):
+		return
+	play_sfx(&"tap")
+	if active_game_tab() == tab:
+		_close_game_screens()
+		return
+	_close_game_screens()
+	match tab:
+		"inv":
+			show_inv()
+		"log":
+			open_log()
+		"map":
+			open_map()
+	_refresh_game_tabs()
+
+
+func _close_game_screens() -> void:
+	if windows != null and not windows.drag_active():
+		windows.close_all(true)
+	if map_overlay != null and map_overlay.visible and not map_locked_open:
+		map_overlay.hide()
+
+
+## TAB: the next rail screen down (wraps STA -> INV -> LOG -> MAP -> STA).
+func cycle_game_tab(dir := 1) -> void:
+	var shown: Array = GAME_TABS.filter(func(t: String) -> bool: return tab_revealed(t))   # only the visible buttons
+	if shown.is_empty():
+		return
+	var i := shown.find(active_game_tab())
+	open_game_tab(str(shown[posmod(i + dir, shown.size())]))
+
+
+# ---- DYNAMIC MENU: rail buttons are revealed as they are earned (vars["rail_tabs"], carried between
+## scenes). Unset = every button but LOG (chapters without the onboarding). The excursion onboarding
+## starts with STA only; MAP comes with the map tutorial, INV with the first locker opening. LOG stays
+## hidden for now (a forced LOG moment comes later); the LOG pop-up still opens from links.
+## A hidden button's hotkey does nothing. The minimap shows only once MAP is revealed.
+const RAIL_DEFAULT := ["sta", "inv", "map"]
+const REVEAL_TIME := 0.55
+
+func rail_tabs() -> Array:
+	return (vars.get("rail_tabs", RAIL_DEFAULT) as Array)
+
+
+func tab_revealed(tab: String) -> bool:
+	return rail_tabs().has(tab)
+
+
+func set_rail_tabs(tabs: Array) -> void:
+	vars["rail_tabs"] = tabs.duplicate()
+	_apply_rail()
+
+
+## Adds `tab` to the menu (hologram turn-on of the button, and of the minimap for "map").
+func reveal_tab(tab: String, animate := true) -> void:
+	if tab_revealed(tab):
+		return
+	var list := rail_tabs().duplicate()
+	list.append(tab)
+	vars["rail_tabs"] = list
+	_apply_rail()
+	if animate:
+		play_sfx(&"tap")
+		holo_pop(game_tab_button(tab))
+		if tab == "map" and mini_map_frame != null:
+			holo_pop(mini_map_frame)
+
+
+## The windows' CRT turn-on, cheap version for HUD parts: a bright flash in from nothing, then a flicker.
+func holo_pop(c: Control) -> void:
+	if c == null:
+		return
+	# (rail buttons / the minimap sit in containers, which reset scale: so light + flicker, no scaling)
+	c.modulate = Color(1.8, 2.0, 1.8, 0.0)
+	var tw := c.create_tween()
+	tw.tween_property(c, "modulate", Color(1.8, 2.0, 1.8, 0.9), REVEAL_TIME * 0.18)
+	tw.tween_property(c, "modulate", Color(1.0, 1.0, 1.0, 0.25), REVEAL_TIME * 0.12)
+	tw.tween_property(c, "modulate", Color(1.4, 1.5, 1.4, 1.0), REVEAL_TIME * 0.15)
+	for k in 3:
+		tw.tween_property(c, "modulate", Color(1, 1, 1, 0.45), 0.04)
+		tw.tween_property(c, "modulate", Color(1.25, 1.35, 1.25, 1.0), 0.04)
+	tw.tween_property(c, "modulate", Color.WHITE, 0.08)
+
+
+func _apply_rail() -> void:
+	if inv_button == null:
+		return
+	var on := excursion_chrome
+	for t: String in GAME_TABS:
+		var b := game_tab_button(t)
+		if b != null:
+			b.visible = on and tab_revealed(t)
+	if is_node_ready() and mini_map_frame != null and _mini_map != null:
+		mini_map_frame.visible = not vessel_map.is_empty() and minimap_shown()
+
+
+func minimap_shown() -> bool:
+	return not excursion_chrome or tab_revealed("map")
+
+
+func _refresh_game_tabs() -> void:
+	if not excursion_chrome or inv_button == null:
+		return
+	var act := active_game_tab()
+	for t: String in GAME_TABS:
+		var b := game_tab_button(t)
+		if b != null:
+			b.theme_type_variation = &"TabButtonActive" if t == act else &"TabButton"
+
+
+## The whole STA / INV / LOG / MAP rail (global), for the tutorial highlight.
+func tab_rail_rect() -> Rect2:
+	var r := Rect2()
+	for t: String in GAME_TABS:
+		var b := game_tab_button(t)
+		if b != null and b.is_visible_in_tree():
+			r = b.get_global_rect() if r.size == Vector2.ZERO else r.merge(b.get_global_rect())
+	return r
+
+
+
 
 
 ## The window layer (character screen + container windows), above the story and the map, under the pause menu.
@@ -1107,6 +1436,9 @@ func _ensure_windows() -> void:
 	windows.item_actions_cb = char_item_actions
 	windows.character_action.connect(_on_character_action)
 	windows.station_option.connect(_on_station_option)
+	windows.world_release.connect(_on_world_release)
+	windows.store_cb = _store_in_container
+	windows.target_cb = map_target_at
 
 
 func _on_character_changed(open: bool) -> void:
@@ -1122,6 +1454,8 @@ func _on_container_item_taken(act_id: String, item: Dictionary) -> void:
 	if act_id == FLOOR_ACT:
 		pickup_dropped(id)   # from the floor window: the id is the drop's uid
 		return
+	if bool(item.get("extra", false)):
+		_forget_extra(act_id, id)
 	mark_item_taken(id)
 	var prev: Dictionary = items.get(StringName(id), {})
 	prev["label"] = str(item.get("label", id))
@@ -1139,6 +1473,8 @@ func show_inv() -> void:
 		return
 	_ensure_windows()
 	windows.toggle_character()
+	if windows.character_open():
+		maybe_start_tutorial("inventory")     # the first time the inventory / character screen is up
 
 
 ## True while the character screen or a container window is up (story input is blocked then).
@@ -1201,6 +1537,34 @@ func ensure_vessel_map() -> void:
 	_refresh_maps()
 
 
+## The minimap and the full map look like the holo windows: their green background (HoloWindow WIN_BG,
+## pale edge) with the same subtle scanlines / flicker / glitch (ui/holo_fx.gd), dark ink for text.
+const HoloFx := preload("res://ui/holo_fx.gd")
+const HoloWin := preload("res://ui/holo_window.gd")
+
+func _style_holo_maps() -> void:
+	# round 8: the schematic itself (full map + minimap) keeps the OLD dark map background and ink;
+	# only the window frame around the full map is holo green (and flickers)
+	for v: ShipMapView in [_mini_map, _full_map]:
+		if v != null:
+			v.bg_color = ShipMapView.COL_BG
+	var page := map_overlay.get_node_or_null("MapPage") as PanelContainer
+	if page != null:
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = HoloWin.WIN_BG
+		sb.border_color = HoloWin.WIN_EDGE
+		sb.set_border_width_all(2)
+		sb.set_corner_radius_all(4)
+		sb.set_content_margin_all(16)
+		page.add_theme_stylebox_override("panel", sb)
+		if page.get_node_or_null("HoloFx") == null:
+			var fx := HoloFx.new()
+			page.add_child(fx)
+			page.move_child(fx, 0)   # behind the content: the dark schematic stays clean
+	for l: Label in [map_title, map_subtitle, map_info]:
+		l.add_theme_color_override("font_color", MAP_INK)
+
+
 func _setup_maps() -> void:
 	_mini_map = ShipMapView.new()
 	_mini_map.name = "MiniMap"
@@ -1219,10 +1583,10 @@ func _setup_maps() -> void:
 	_mini_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_mini_banner.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_mini_banner.add_theme_font_size_override("font_size", 12)
-	_mini_banner.add_theme_color_override("font_color", MAP_MSG_COLOR)
+	_mini_banner.add_theme_color_override("font_color", MAP_BANNER_WARN)
 	var bsb := StyleBoxFlat.new()
 	bsb.bg_color = Color(0.05, 0.02, 0.01, 0.92)
-	bsb.border_color = MAP_MSG_COLOR
+	bsb.border_color = MAP_BANNER_WARN
 	bsb.set_border_width_all(1)
 	_mini_banner.add_theme_stylebox_override("normal", bsb)
 	mini_map_host.add_child(_mini_banner)
@@ -1235,7 +1599,9 @@ func _setup_maps() -> void:
 	_full_map.door_clicked.connect(map_door_click)
 	_full_map.marker_clicked.connect(_on_map_marker_clicked)
 	map_host.add_child(_full_map)
+	_style_holo_maps()
 	map_close_button.pressed.connect(close_map)
+	map_close_button.text = "EXIT"      # bottom right, like the other screens (see pda_screen.tscn MapFooterRow)
 	map_close_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	map_dim.gui_input.connect(func(e: InputEvent) -> void:
 		if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
@@ -1254,7 +1620,7 @@ func _setup_maps() -> void:
 func _refresh_maps() -> void:
 	if not is_node_ready() or _mini_map == null:
 		return
-	mini_map_frame.visible = not vessel_map.is_empty()
+	mini_map_frame.visible = not vessel_map.is_empty() and minimap_shown()
 	if vessel_map.is_empty():
 		return
 	_apply_door_flags()
@@ -1299,7 +1665,7 @@ func _map_room_label(id: String) -> String:
 func _on_map_room_hovered(id: String) -> void:
 	if Time.get_ticks_msec() < _map_msg_until:
 		return   # a refusal / move message is showing
-	map_info.remove_theme_color_override("font_color")
+	map_info.add_theme_color_override("font_color", MAP_INK)
 	var here := str(vessel_map.get("current", ""))
 	var line := "YOU ARE HERE: %s" % _map_room_label(here)
 	if map_hint != "" and id == "":
@@ -1453,7 +1819,7 @@ func map_message(text: String, warn := true) -> void:
 	if warn:
 		map_info.add_theme_color_override("font_color", MAP_MSG_COLOR)
 	else:
-		map_info.remove_theme_color_override("font_color")
+		map_info.add_theme_color_override("font_color", MAP_INK)
 	_map_msg_until = Time.get_ticks_msec() + int(MAP_MSG_SECONDS * 1000.0)
 	await get_tree().create_timer(MAP_MSG_SECONDS).timeout
 	if token == _map_msg_token and is_inside_tree():
@@ -1526,7 +1892,7 @@ func map_set_door_state(arg: String, state: String) -> void:
 ## Debug (--map_demo): every legend state on screen at once.
 func apply_map_demo() -> void:
 	ensure_vessel_map()
-	map_set_room(&"stasis_15")
+	map_set_room(&"stasis_3")
 	map_explore(&"ready_room")
 	map_explore(&"aft_port")
 	map_set_room_state(&"stbd_hold", "locked")
@@ -1729,7 +2095,7 @@ func show_plate(title_text: String, sub_text := "", hint_text := "") -> void:
 
 func hide_plate() -> void:
 	plate.hide()
-	journal_button.show()
+	journal_button.visible = not excursion_chrome     # no menu button in the game HUD
 
 
 func _on_plate_input(event: InputEvent) -> void:
@@ -1740,8 +2106,21 @@ func _on_plate_input(event: InputEvent) -> void:
 # ---------------------------------------------------------------- audio
 
 func play_sfx(kind: StringName) -> void:
+	sfx_log.append(str(kind))
+	if sfx_log.size() > 64:
+		sfx_log.pop_front()
 	var p: AudioStreamPlayer = null
 	match kind:
+		&"loot":
+			_play_file_sfx(LOOT_SFX, -8.0)
+			return
+		&"drop":
+			_play_file_sfx(DROP_SFX, -8.0)
+			return
+		&"unlock":
+			_play_file_sfx(UNLOCK_SFX, -6.0)
+			_play_file_sfx(DOOR_UNLOCK_SFX, -10.0)
+			return
 		&"open":
 			p = sfx_open
 		&"close":
@@ -1968,11 +2347,14 @@ func suit_is_worn() -> bool:
 	return bool(vars.get("suit_worn", false))
 
 
-## Character-screen buttons for an inventory entry: "Put on" for wearables, "Drop" for everything.
+## Character-screen buttons for an inventory entry: "Put on" for wearables, "Drink" for the coffee,
+## "Drop" for everything.
 func char_item_actions(entry: Dictionary) -> Array:
 	var id := str(entry.get("id", ""))
 	if id in WEARABLE_IDS and not (id == str(SUIT_ID) and suit_is_worn()):
 		return ["wear", "drop"]
+	if id in CONSUMABLE_IDS:
+		return ["drink", "drop"]
 	return ["drop"]
 
 
@@ -1983,43 +2365,49 @@ func _on_character_action(action: String, item: Dictionary) -> void:
 		"wear":
 			if str(item.get("id", "")) == str(SUIT_ID):
 				wear_suit()
+		"drink":
+			if str(item.get("id", "")) == str(THERMOS_ID):
+				drink_thermos()
 
 
-# ---- the suit
+# ---- time: fade out and back (any action that takes time), the suit, the coffee
 
-## Put the suit on: costs 1 hr (refused with a message if there is not enough), plays the zipper,
-## fades the screen out and back in; when it is dark the suit leaves the inventory and the figure
-## on the character screen turns green. vars["suit_worn"] = true.
-func wear_suit() -> bool:
-	if _suit_busy or suit_is_worn() or SUIT_ID not in inventory:
-		return false
-	var why := hours_refusal(1)
-	if why != "":
-		if windows != null:
-			windows.notice(why, "character")
-		play_sfx(&"close")
-		return false
-	spend_hours(1)
+## Fades the screen to black and back. `mid` runs while it is dark (open the window, change the
+## state). `sfx_path` plays at the start (the zipper). Input is blocked meanwhile (_suit_busy).
+func fade_through(mid: Callable, sfx_path := "", vol_db := -4.0, done := Callable()) -> void:
 	_suit_busy = true
-	_play_file_sfx(ZIPPER_SFX, -4.0)
+	if sfx_path != "":
+		_play_file_sfx(sfx_path, vol_db)
 	if _suit_fade == null:
 		_suit_fade = ColorRect.new()
 		_suit_fade.name = "SuitFade"
 		_suit_fade.color = Color(0, 0, 0, 0)
 		_suit_fade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		add_child(_suit_fade)
-		move_child(_suit_fade, pause_menu.get_index())   # over the windows, under the pause menu
+	move_child(_suit_fade, pause_menu.get_index())   # over the windows, under the pause menu
 	_suit_fade.mouse_filter = Control.MOUSE_FILTER_STOP
 	_suit_fade.show()
 	var tw := create_tween()
 	tw.tween_property(_suit_fade, "color:a", 1.0, SUIT_FADE_IN)
-	tw.tween_callback(_apply_suit_on)
+	tw.tween_callback(func() -> void:
+		if mid.is_valid():
+			mid.call())
 	tw.tween_interval(SUIT_FADE_HOLD)
 	tw.tween_property(_suit_fade, "color:a", 0.0, SUIT_FADE_OUT)
 	tw.tween_callback(func() -> void:
 		_suit_fade.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_suit_fade.hide()
-		_suit_busy = false)
+		_suit_busy = false
+		if done.is_valid():
+			done.call())
+
+
+## Put the suit on. FREE (no hours). Zipper + fade; when it is dark the suit leaves the inventory and
+## the figure on the character screen turns green. vars["suit_worn"] = true.
+func wear_suit() -> bool:
+	if _suit_busy or suit_is_worn() or SUIT_ID not in inventory:
+		return false
+	fade_through(_apply_suit_on, ZIPPER_SFX, -4.0)
 	return true
 
 
@@ -2033,6 +2421,22 @@ func _apply_suit_on() -> void:
 
 func suit_fade_busy() -> bool:
 	return _suit_busy
+
+
+## Drink the THERMOS OF COFFEE: it is used up and the next time-costing action costs 1 hr less.
+func drink_thermos() -> bool:
+	if THERMOS_ID not in inventory:
+		return false
+	take_item(THERMOS_ID)
+	vars["free_hours"] = free_hour_charges() + 1
+	vars["thermos_drunk"] = int(vars.get("thermos_drunk", 0)) + 1
+	flags["coffee_drunk"] = true
+	play_sfx(&"tap")
+	if windows != null:
+		windows.refresh()
+		windows.notice("HOT. YOUR NEXT ACTION IS FREE", "character")
+	os_toast("COFFEE: NEXT ACTION IS FREE")
+	return true
 
 
 # ---- dropping and picking up
@@ -2055,8 +2459,28 @@ func drop_item(id: StringName) -> bool:
 	if windows != null:
 		windows.refresh()
 	_refresh_maps()
-	play_sfx(&"tap")
+	play_sfx(&"drop")
+	if drop_tip_pending():
+		# the first drop runs the drop tips: tip 1 over the normal screen, the map opens on the last tip
+		if windows != null:
+			windows.close_all(true)
+		maybe_start_tutorial.call_deferred("drop")
+	else:
+		show_map_change()       # the map was added to: windows stay closed, the full map opens
 	return true
+
+
+## RULE: whenever the map is ADDED TO (an item dropped, a door unlocked, a room revealed) the windows
+## close (they do not come back) and the full map opens so the player sees it. The caller plays the
+## matching sound. Searching a container does not do this.
+var map_change_count := 0
+
+func show_map_change() -> void:
+	map_change_count += 1
+	if windows != null:
+		windows.close_all(true)
+	if map_overlay != null and not map_overlay.visible:
+		open_map()
 
 
 func dropped_in(room_id: String) -> Array:
@@ -2093,10 +2517,10 @@ func open_floor(room_id: String) -> void:
 		return
 	var cells: Array = []
 	for e: Dictionary in list:
-		cells.append({"id": str(e.get("uid", "")), "label": str(e.get("label", "")), "detail": str(e.get("detail", "")),
+		cells.append({"id": str(e.get("uid", "")), "icon": str(e.get("id", "")), "label": str(e.get("label", "")), "detail": str(e.get("detail", "")),
 			"hours": 0, "required": false, "actions": ["take"]})
 	var spec := {"container": true, "title": "FLOOR", "text": "Things left on the floor of this room.",
-		"grid": {"cols": 3, "rows": clampi(ceili(cells.size() / 3.0), 3, 8)}, "items": cells}
+		"grid": {"cols": 3, "rows": clampi(ceili(cells.size() / 3.0), 3, 8)}, "items": cells, "no_store": true}
 	_ensure_windows()
 	windows.taken_check = func(_a: String, _i: Dictionary) -> bool: return false
 	play_sfx(&"tap")
@@ -2105,22 +2529,30 @@ func open_floor(room_id: String) -> void:
 
 # ---- map markers
 
-## Markers drawn on the maps: the scene's (LOCKER, COFFEE POT: _scene_map_markers) + dropped items.
+## Markers drawn on the maps: the scene's boxes (LOCKER, COFFEE POT, WINDOW: _scene_map_markers) +
+## one DOT with the item name beside it for every dropped item (kind "drop"; "pile" when there are too many).
 func _build_map_markers() -> Array:
 	var out: Array = _scene_map_markers()
 	var dropped: Dictionary = vars.get("dropped", {})
-	var w := (0.94 - 0.02 * float(DROP_SLOTS - 1)) / float(DROP_SLOTS)
 	for room_id: Variant in dropped:
 		var list: Array = dropped[room_id]
 		var shown := list.size() if list.size() <= DROP_SLOTS else DROP_SLOTS - 1
 		for i in shown:
 			out.append({"id": "drop:%s" % str((list[i] as Dictionary).get("uid", "")), "kind": "drop", "room": str(room_id),
-				"label": str((list[i] as Dictionary).get("label", "")),
-				"rect": [0.03 + float(i) * (w + 0.02), 0.79, w, 0.17]})
+				"label": str((list[i] as Dictionary).get("label", "")), "rect": _drop_cell(i)})
 		if list.size() > DROP_SLOTS:
 			out.append({"id": "pile:%s" % str(room_id), "kind": "pile", "room": str(room_id),
-				"label": "PILE +%d" % (list.size() - shown), "rect": [0.03 + float(shown) * (w + 0.02), 0.79, w, 0.17]})
+				"label": "PILE +%d" % (list.size() - shown), "rect": _drop_cell(shown)})
 	return out
+
+
+## Cell i of the dropped-item grid, as fractions of the room's bounding box. The cells never overlap
+## each other or the boxes at the top of the room.
+func _drop_cell(i: int) -> Array:
+	var col := i % DROP_COLS
+	var row := i / DROP_COLS
+	var rows := [0.27, 0.40, 0.78]       # y of the three rows (the room's name sits at ~0.66, the locks at ~0.5)
+	return [0.07 + float(col) * 0.48, float(rows[row]), 0.39, 0.12]
 
 
 ## Chapters add their own markers (authored_scene.gd: the acts that have a "marker").
@@ -2144,7 +2576,7 @@ func _on_map_marker_clicked(id: String) -> void:
 			if str(e.get("uid", "")) == uid:
 				label = str(e.get("label", ""))
 		if pickup_dropped(uid):
-			play_sfx(&"tap")
+			play_sfx(&"loot")
 			os_toast("PICKED UP: %s" % label)
 	elif id.begins_with("pile:"):
 		open_floor(id.substr(5))
@@ -2157,10 +2589,128 @@ func _on_map_station_clicked(_id: String) -> void:
 	pass
 
 
+# ---- using an item on something (drag it out of the inventory and let go on a target)
+
+const WRONG_ITEM_TEXT := "That doesn't work."
+const NOTHING_TEXT := "Nothing happens."
+
+## An inventory item was used on `target`: "door:<a|b>" (a lock) or "marker:<id>" (LOCKER, COFFEE POT,
+## WINDOW...). Result: "unlocked", "wrong", "nothing", "hook" (a chapter handled it) or "".
+signal item_used(target: String, item_id: String, result: String)
+
+
+## Override in a chapter for puzzles: return true if `item_id` on `target` was handled.
+func _use_item_hook(_target: String, _item_id: String) -> bool:
+	return false
+
+
+func use_item_on(target: String, item_id: String) -> String:
+	if StringName(item_id) not in inventory or target == "":
+		return ""
+	var result := "nothing"
+	if _use_item_hook(target, item_id):
+		result = "hook"
+	elif target.begins_with("door:"):
+		var parts := target.substr(5).split("|", false)
+		var d := map_door_between(parts[0], parts[1]) if parts.size() >= 2 else {}
+		if d.is_empty() or str(d.get("state", "open")) == "open":
+			_map_note(NOTHING_TEXT)
+		else:
+			var need := str(d.get("key", "")).strip_edges()
+			if need != "" and item_id == need:
+				_unlock_door(d)          # the card is NOT used up: it stays in the inventory
+				result = "unlocked"
+			else:
+				_map_error(WRONG_ITEM_TEXT)
+				result = "wrong"
+	else:
+		_map_note(NOTHING_TEXT)
+	item_used.emit(target, item_id, result)
+	return result
+
+
+func _map_note(text: String) -> void:
+	_map_banner(text, true)
+	map_message(text, true)
+
+
+## The usable thing under a screen point on the visible map ("door:a|b", "marker:id") or "".
+## Dropped-item dots are not targets (the item just lands on the ground there).
+func map_target_at(pos: Vector2) -> String:
+	var view: ShipMapView = _full_map if (map_overlay != null and map_overlay.visible) else _mini_map
+	if not is_instance_valid(view) or not view.is_visible_in_tree():
+		return ""
+	var local := pos - view.global_position
+	if not Rect2(Vector2.ZERO, view.size).has_point(local):
+		return ""
+	var mk := view.marker_at(local)
+	if mk != "" and not view.is_dot(view.find_marker(mk)):
+		return "marker:" + mk
+	var dk := view.door_at(local)
+	if dk != "":
+		return "door:" + dk
+	return ""
+
+
+## An inventory item was let go outside the windows: on a lock / marker it is used, anywhere else it
+## is dropped on the floor of the current room.
+func _on_world_release(item: Dictionary, pos: Vector2) -> void:
+	var id := str(item.get("id", ""))
+	if StringName(id) not in inventory:
+		return
+	var target := map_target_at(pos)
+	if windows != null:
+		windows.close_all(true)   # let go out in the room: the windows stay closed (see the result)
+	if target != "":
+		use_item_on(target, id)
+		return
+	if drop_item(StringName(id)):
+		os_toast("DROPPED: %s" % str(item.get("label", id)))
+
+
+## Container drop-in: an inventory item goes into the container's state (vars["container_items"]).
+## The window already shows it; false = refuse (the floor, or the item is not carried).
+func _store_in_container(act_id: String, item: Dictionary) -> bool:
+	var id := str(item.get("id", ""))
+	if act_id == FLOOR_ACT or StringName(id) not in inventory or (id == str(SUIT_ID) and suit_is_worn()):
+		return false
+	var store: Dictionary = vars.get("container_items", {})
+	var list: Array = store.get(act_id, [])
+	for e: Dictionary in list:
+		if str(e.get("id", "")) == id:
+			list.erase(e)
+			break
+	list.append({"id": id, "label": str(item.get("label", id)).to_upper(), "detail": str(item.get("detail", "")),
+		"hours": 0, "required": false, "actions": ["take"], "extra": true})
+	store[act_id] = list
+	vars["container_items"] = store
+	take_item(StringName(id))
+	if windows != null:
+		windows.refresh()
+	return true
+
+
+## Items the player put into a container (they come back when it is opened again).
+func container_extras(act_id: String) -> Array:
+	return ((vars.get("container_items", {}) as Dictionary).get(act_id, []) as Array).duplicate(true)
+
+
+func _forget_extra(act_id: String, id: String) -> void:
+	var store: Dictionary = vars.get("container_items", {})
+	var list: Array = store.get(act_id, [])
+	for e: Dictionary in list:
+		if str(e.get("id", "")) == id:
+			list.erase(e)
+			break
+	store[act_id] = list
+	vars["container_items"] = store
+
+
 # ---- padlocked doors
 
-## A lock (or a clickable open door) was clicked on a map. A locked door with a required card:
-## without it, an error line + sound ("Requires Airlock Keycard", exact); with it, the lock shakes,
+## A lock (or a clickable open door) was clicked on a map. A locked door with a required card always
+## gives the error line + sound ("Requires Airlock Keycard", exact), whatever is in the inventory.
+## The card unlocks it only when it is dragged onto the lock (use_item_on): the lock shakes,
 ## pops open and is replaced by the open doorway, and the room behind is named. Data (see
 ## data/vessel.gd): door {key: item id, key_name: "Airlock Keycard", behind: room id,
 ## fail: "restrict" (reveal the RESTRICTED stamp when it is tried without the card)}.
@@ -2178,14 +2728,15 @@ func map_door_click(key: String) -> void:
 		return
 	var need := str(d.get("key", "")).strip_edges()
 	var behind := str(d.get("behind", ""))
-	if need != "" and StringName(need) in inventory:
-		_unlock_door(d)
-		return
+	# A click never unlocks: the keycard has to be DRAGGED from the inventory onto the lock
+	# (use_item_on). Carrying it changes nothing here.
 	var msg := "Requires %s" % str(d.get("key_name", need.capitalize())) if need != "" else "Keycard required"
 	_map_error(msg)
+	flags["tut_doors_done"] = true
 	if str(d.get("fail", "")) == "restrict" and behind != "" and not map_room_restricted(behind):
 		map_restrict_room(StringName(behind), true)   # the console tells you what the room is
 		flags["room_revealed_" + behind] = true
+		show_map_change()       # a room was revealed: the map is added to
 
 
 ## The flags are the record: doors opened with their card stay open (and their room named), and a
@@ -2223,7 +2774,11 @@ func _unlock_door(d: Dictionary) -> void:
 	for v: Variant in views:
 		if is_instance_valid(v):
 			(v as ShipMapView).pop_unlock(ShipMapView.door_key(d))
-	_play_file_sfx(UNLOCK_SFX, -6.0)
+			if not room.is_empty():
+				(v as ShipMapView).pop_label(behind)     # the room's name stamps in (AIR LOCK)
+	play_sfx(&"unlock")
+	flags["tut_doors_done"] = true
+	show_map_change()           # the inventory does NOT reopen: the full map shows the open door
 	_map_banner("DOOR UNLOCKED", false)
 	map_message("DOOR UNLOCKED", false)
 
@@ -2242,7 +2797,7 @@ func _map_banner(text: String, warn := true) -> void:
 	_mini_banner_token += 1
 	var token := _mini_banner_token
 	_mini_banner.text = text
-	_mini_banner.add_theme_color_override("font_color", MAP_MSG_COLOR if warn else Color(0.6, 0.95, 0.62))
+	_mini_banner.add_theme_color_override("font_color", MAP_BANNER_WARN if warn else Color(0.6, 0.95, 0.62))
 	_mini_banner.show()
 	await get_tree().create_timer(MAP_MSG_SECONDS + 0.4).timeout
 	if token == _mini_banner_token and is_instance_valid(_mini_banner):
@@ -2251,6 +2806,7 @@ func _map_banner(text: String, warn := true) -> void:
 
 ## Plays a short sound file once (silently skipped if the file is not imported / missing).
 func _play_file_sfx(path: String, volume_db := -6.0) -> void:
+	sfx_log.append(path)
 	if not ResourceLoader.exists(path):
 		return
 	var p: AudioStreamPlayer = _file_sfx.get(path)
@@ -2272,12 +2828,12 @@ func open_station(act_id: String, spec: Dictionary) -> void:
 	var sid := str(spec.get("station", act_id))
 	_ensure_windows()
 	play_sfx(&"tap")
-	windows.open_station(sid, spec, _station_provider.bind(sid))
+	windows.open_station(sid, spec, _station_provider.bind(sid, str(spec.get("text", ""))))
 
 
-func _station_provider(sid: String) -> Dictionary:
+func _station_provider(sid: String, text := "") -> Dictionary:
 	if sid == "coffee":
-		return coffee_provider()
+		return coffee_provider(text)
 	return {"text": "", "options": []}
 
 
@@ -2286,12 +2842,17 @@ func _on_station_option(sid: String, oid: String) -> void:
 		coffee_option(oid)
 
 
-## Counters live in vars["coffee"]. A later pass can cap the pot (ship AI voicelines getting annoyed)
-## and switch it off with coffee_set_disabled(true): a disabled machine offers no options.
+const COFFEE_TEXT := "The coffee pot is empty and cold. Surely there are supplies in the cabinets above. Maybe you could even find a thermos. Do you want to brew coffee?"
+const COFFEE_EMPTY_TEXT := "The pot is empty."
+const COFFEE_BREW_LABEL := "Brew coffee (1 hr)"
+
+
+## Counters live in vars["coffee"]: brews (how often the pot was used), disabled (a later pass can
+## switch it off; the ship AI voicelines will read both). `brewed` = the one brew is done.
 func coffee_state() -> Dictionary:
 	var c: Variant = vars.get("coffee", null)
 	if not (c is Dictionary):
-		c = {"pot": false, "brews": 0, "drinks": 0, "disabled": false}
+		c = {"pot": false, "brews": 0, "drinks": 0, "disabled": false, "brewed": false}
 		vars["coffee"] = c
 	return c
 
@@ -2302,28 +2863,21 @@ func coffee_set_disabled(on: bool) -> void:
 		windows.refresh_station()
 
 
-func coffee_provider() -> Dictionary:
+func coffee_provider(text := "") -> Dictionary:
 	var c := coffee_state()
 	if bool(c.get("disabled", false)):
 		return {"text": "MACHINE DISABLED.", "options": [], "pot": "empty", "disabled": true}
-	if bool(c.get("pot", false)):
-		return {"text": "A full pot. It is hot and it smells like coffee.",
-			"options": [{"id": "drink", "label": "Drink coffee? (1 hr)"}], "pot": "full", "disabled": false}
-	return {"text": "The pot is empty and cold.",
-		"options": [{"id": "brew", "label": "Brew a Pot (1 hr)"}], "pot": "empty", "disabled": false}
+	if bool(c.get("brewed", false)):
+		return {"text": COFFEE_EMPTY_TEXT, "options": [], "pot": "empty", "disabled": false}
+	return {"text": text if text.strip_edges() != "" else COFFEE_TEXT,
+		"options": [{"id": "brew", "label": COFFEE_BREW_LABEL}], "pot": "empty", "disabled": false}
 
 
-## "brew" / "drink": each costs 1 hr (refused with a message when the hours are not there).
-## The pot never runs dry for now: after the first brew, "Drink coffee?" stays on offer.
+## "brew": costs 1 hr (refused with a message when the hours are not there), fades out and back, and
+## the player ends up with a THERMOS OF COFFEE. NOT repeatable: afterwards the pot is empty.
 func coffee_option(oid: String) -> bool:
 	var c := coffee_state()
-	if bool(c.get("disabled", false)):
-		return false
-	if oid == "brew" and bool(c.get("pot", false)):
-		return false
-	if oid == "drink" and not bool(c.get("pot", false)):
-		return false
-	if oid != "brew" and oid != "drink":
+	if oid != "brew" or bool(c.get("disabled", false)) or bool(c.get("brewed", false)) or _suit_busy:
 		return false
 	var why := hours_refusal(1)
 	if why != "":
@@ -2332,17 +2886,26 @@ func coffee_option(oid: String) -> bool:
 		play_sfx(&"close")
 		return false
 	spend_hours(1)
-	if oid == "brew":
-		c["pot"] = true
-		c["brews"] = int(c.get("brews", 0)) + 1
-		flags["coffee_brewed"] = true
-	else:
-		c["drinks"] = int(c.get("drinks", 0)) + 1
-		flags["coffee_drunk"] = true
+	fade_through(_finish_brew)
+	return true
+
+
+func _finish_brew() -> void:
+	var c := coffee_state()
+	c["brews"] = int(c.get("brews", 0)) + 1
+	c["brewed"] = true
+	flags["coffee_brewed"] = true
+	var prev: Dictionary = items.get(THERMOS_ID, {})
+	prev["label"] = THERMOS_LABEL
+	prev["desc"] = THERMOS_DETAIL
+	items[THERMOS_ID] = prev
+	mark_item_taken(str(THERMOS_ID))
+	give_item(THERMOS_ID)
 	play_sfx(&"tap")
 	if windows != null:
+		windows.refresh()
 		windows.refresh_station()
-	return true
+	os_toast("YOU FOUND A THERMOS. COFFEE BREWED.")
 
 
 # ---- Yes / No prompt
@@ -2608,7 +3171,8 @@ func _ensure_input_map() -> void:
 		"choice_8": [KEY_8, KEY_KP_8],
 		"choice_9": [KEY_9, KEY_KP_9],
 		"tab_next": [KEY_E, KEY_TAB],
-		"toggle_character": [KEY_TAB, KEY_C, KEY_I],
+		"toggle_character": [KEY_I, KEY_C],
+
 		"tab_prev": [KEY_Q],
 		"toggle_fullscreen": [KEY_F11],
 		"advance": [KEY_SPACE, KEY_ENTER],
@@ -2689,13 +3253,33 @@ func _input(event: InputEvent) -> void:
 			guide_tour.press()
 		_handled()
 		return
-	if windows != null and windows.any_open():
-		# A window is up: the story underneath gets no keys. TAB / C / I toggle the character screen.
+	if excursion_chrome and not popup.visible and not plate.visible and not map_locked_open \
+			and safe_area.is_visible_in_tree() and not (windows != null and windows.drag_active()):
+		# game rail: TAB / E down, Shift+Tab / Q up (wrapping), I / C inventory
+		if event.is_action_pressed("tab_prev"):
+			cycle_game_tab(-1)
+			_handled()
+			return
+		if event.is_action_pressed("tab_next"):
+			cycle_game_tab(1)
+			_handled()
+			return
 		if event.is_action_pressed("toggle_character"):
+			if not tab_revealed("inv"):
+				pass     # INV not earned yet: the key does nothing
+			elif windows != null and (windows.container_open() or windows.station_is_open()):
+				windows.toggle_character()   # beside a container: only the character screen toggles
+			else:
+				open_game_tab("inv")
+			_handled()
+			return
+	if windows != null and windows.any_open():
+		# A window is up: the story underneath gets no keys.
+		if event.is_action_pressed("toggle_character") and tab_revealed("inv"):
 			windows.toggle_character()
 		_handled()
 		return
-	if excursion_chrome and event.is_action_pressed("toggle_character") and not popup.visible \
+	if excursion_chrome and event.is_action_pressed("toggle_character") and tab_revealed("inv") and not popup.visible \
 			and not plate.visible and not map_overlay.visible and safe_area.is_visible_in_tree():
 		show_inv()
 		_handled()
@@ -2710,6 +3294,9 @@ func _input(event: InputEvent) -> void:
 			return
 	if not popup.visible and not plate.visible and _overlay_input(event):
 		_handled()
+		return
+	if event.is_action_pressed("open_map") and excursion_chrome and not tab_revealed("map") and not map_overlay.visible:
+		_handled()     # MAP not revealed yet: M does nothing
 		return
 	if event.is_action_pressed("open_map"):
 		if map_overlay.visible:

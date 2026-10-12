@@ -1,8 +1,9 @@
 extends "res://ui/holo_window.gd"
 ## CONTAINER WINDOW (David's sketch, right panel): a window for a green ACT word that is a container.
 ## Left 25 %: the title (top-left) and the description text under it. Right ~75 %: a darker teal item
-## grid. Bottom: buttons for the highlighted item (TAKE ITEM today, but each item lists its own
-## "actions", see ACTIONS) and EXIT at the bottom right. Placeholder art, all drawn in code.
+## grid. Containers are DRAG AND DROP ONLY: there is no Take button (drag an item onto the character
+## screen to take it). Bottom: buttons for other item "actions" (use, inspect...; none in the game yet)
+## and EXIT at the bottom right. Placeholder art, all drawn in code.
 ##
 ## Spec (an act with "container": true, see docs/SCENE_WRITER.md):
 ##   {container, title, text, grid: {cols, rows}, items: [{id, label, hours, required, detail, actions}]}
@@ -12,6 +13,8 @@ signal take_requested(act_id: String, item: Dictionary)
 signal action_requested(act_id: String, action: String, item: Dictionary)
 signal exit_requested
 signal selection_changed(item: Dictionary)
+## An item was pressed and dragged: ("container", slot, global mouse position). See window_manager.gd.
+signal item_drag_started(source: String, slot: Control, global_pos: Vector2)
 
 ## Known item actions and the button text pattern ({item} = LABEL). Only "take" does anything built-in.
 const ACTIONS := {
@@ -26,8 +29,8 @@ const CELL_W := 56.0
 const CELL_H := 52.0
 const CELL_GAP := 4.0
 const GRID_PAD := 6.0
-## The description shrinks through these font sizes until it fits without a scroll bar.
-const DESC_SIZES := [10, 9, 8]
+## The description box is a fixed size with a fixed font (no shrinking); long text scrolls.
+const DESC_FONT := 10
 
 var act_id := ""
 var title := ""
@@ -36,6 +39,8 @@ var cols := 3
 var rows := 3
 var items: Array = []             # normalized item dictionaries (+ "taken": bool)
 var selected_id := ""
+## false: items can be taken out but not dropped in (the floor window of dropped items).
+var accepts_drops := true
 
 var title_label: Label
 var desc_box: RichTextLabel
@@ -64,13 +69,14 @@ func _build_body() -> void:
 	desc_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	desc_box.position = Vector2(12, 34)
 	desc_box.size = Vector2(left_w, 204)
-	desc_box.scroll_active = false          # never a scroll bar: the font shrinks instead
+	desc_box.scroll_active = true           # fixed size + fixed font: a scroll bar if the text is long
+	desc_box.mouse_filter = Control.MOUSE_FILTER_PASS
 	desc_box.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	desc_box.add_theme_color_override("default_color", INK)
 	desc_box.add_theme_color_override("font_selected_color", INK)
 	desc_box.add_theme_font_override("normal_font", _mono)
 	desc_box.add_theme_font_override("bold_font", _mono_bold)
-	_set_desc_font(int(DESC_SIZES[0]))
+	_set_desc_font(DESC_FONT)
 	desc_box.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
 	body.add_child(desc_box)
 
@@ -107,12 +113,8 @@ func _set_desc_font(px: int) -> void:
 	desc_box.add_theme_font_size_override("italics_font_size", px)
 
 
-## Picks the biggest font that lets the whole text fit in the box (no scroll bar ever).
-func _fit_description() -> void:
-	for px: int in DESC_SIZES:
-		_set_desc_font(px)
-		if desc_box.get_content_height() <= int(desc_box.size.y):
-			return
+func desc_font_size() -> int:
+	return desc_box.get_theme_font_size("normal_font_size")
 
 
 func description_fits() -> bool:
@@ -125,7 +127,8 @@ func configure(p_act_id: String, spec: Dictionary, is_taken := Callable()) -> vo
 	title = str(spec.get("title", "")).strip_edges()
 	if title == "":
 		title = p_act_id.to_upper()
-	description = str(spec.get("text", ""))
+	description = paragraphs(str(spec.get("text", "")))
+	accepts_drops = not bool(spec.get("no_store", false))
 	var g: Dictionary = spec.get("grid", {}) if spec.get("grid", {}) is Dictionary else {}
 	cols = clampi(int(g.get("cols", 3)), 1, 8)
 	rows = clampi(int(g.get("rows", 3)), 1, 8)
@@ -137,6 +140,7 @@ func configure(p_act_id: String, spec: Dictionary, is_taken := Callable()) -> vo
 			items.append(it)
 	selected_id = ""
 	title_label.text = title.to_upper()
+	_assign_slots()
 	_rebuild_grid()
 	_refresh_text()
 	_refresh_actions()
@@ -163,42 +167,102 @@ func _rebuild_grid() -> void:
 		s.position = grid_bg.position + Vector2(pad + float(i % cols) * (sw + gap), pad + float(i / cols) * (sh + gap))
 		s.size = Vector2(sw, sh)
 		s.draggable = true
-		s.drag_kind = "container_item"
-		s.drag_tag = act_id
 		s.pressed.connect(_on_slot_pressed)
+		s.drag_started.connect(func(sl: Control, pos: Vector2) -> void: item_drag_started.emit("container", sl, pos))
 		body.add_child(s)
 		slots.append(s)
-	# items fill the grid in order (an item may pin itself with "slot": n)
-	var at: Dictionary = {}          # cell index -> item index
-	for k in items.size():
-		var pin := int((items[k] as Dictionary).get("slot", -1))
-		if pin >= 0 and pin < slots.size() and not at.has(pin):
-			at[pin] = k
-	var placed: Dictionary = {}
-	for cell in at:
-		placed[int(at[cell])] = true
-	var next := 0
-	for k in items.size():
-		if placed.has(k):
-			continue
-		while at.has(next):
-			next += 1
-		if next >= slots.size():
-			break   # more items than cells (the Scene Writer warns about this)
-		at[next] = k
-		next += 1
+	# every item sits in its own cell ("slot", assigned by _assign_slots)
 	for i in slots.size():
 		var s2: Control = slots[i]
-		var it2: Dictionary = items[int(at[i])] if at.has(i) else {}
-		s2.set_item({} if it2.is_empty() or bool(it2.get("taken", false)) else it2)
+		s2.set_item({})
 		s2.set_selected(false)
+	for it2: Dictionary in items:
+		var cell := int(it2.get("slot", -1))
+		if cell >= 0 and cell < slots.size() and not bool(it2.get("taken", false)):
+			(slots[cell] as Control).set_item(it2)
 
 
+## Gives every item a cell: its own pin ("slot": n) if free, otherwise the next free cell in order.
+## Items taken out are skipped, so their cell stays free for something dropped in later.
+func _assign_slots() -> void:
+	var used: Dictionary = {}
+	for it: Dictionary in items:
+		if bool(it.get("taken", false)):
+			it["slot"] = -1
+			continue
+		var pin := int(it.get("slot", -1))
+		if pin >= 0 and pin < cols * rows and not used.has(pin):
+			used[pin] = true
+		else:
+			it["slot"] = -1
+	var next := 0
+	for it: Dictionary in items:
+		if bool(it.get("taken", false)) or int(it.get("slot", -1)) >= 0:
+			continue
+		while used.has(next):
+			next += 1
+		it["slot"] = next        # beyond the grid: not shown (the Scene Writer warns about this)
+		used[next] = true
+		next += 1
+
+
+func free_cell() -> int:
+	var used: Dictionary = {}
+	for it: Dictionary in items:
+		if not bool(it.get("taken", false)) and int(it.get("slot", -1)) >= 0:
+			used[int(it["slot"])] = true
+	for i in cols * rows:
+		if not used.has(i):
+			return i
+	return -1
+
+
+## An item dropped into the container: it takes the first free cell. false if the grid is full or
+## the container does not take drops.
+func store_item(entry: Dictionary) -> bool:
+	var cell := free_cell()
+	if cell < 0 or not accepts_drops:
+		return false
+	var it := entry.duplicate(true)
+	it["taken"] = false
+	it["slot"] = cell
+	if not it.has("actions"):
+		it["actions"] = ["take"]
+	for old: Dictionary in items:     # the same id came out of here before: reuse that entry
+		if str(old.get("id", "")) == str(it.get("id", "")) and bool(old.get("taken", false)):
+			items.erase(old)
+			break
+	items.append(it)
+	(slots[cell] as Control).set_item(it)
+	_refresh_text()
+	return true
+
+
+## The window's screen rectangle (for drag hit tests).
+func screen_rect() -> Rect2:
+	return Rect2(global_position, panel_size)
+
+
+## "A.\nB.\n\nC." -> "A.\n\nB.\n\nC.": one empty line between paragraphs.
+static func paragraphs(text: String) -> String:
+	var out: PackedStringArray = []
+	for line in text.replace("\r", "").split("\n"):
+		if line.strip_edges() != "":
+			out.append(line.strip_edges())
+	return "\n\n".join(out)
+
+
+## The item with this id; one still in the container wins over an old taken entry with the same id
+## (an item taken out and later put back in).
 func find_item(id: String) -> Dictionary:
+	var gone: Dictionary = {}
 	for it: Dictionary in items:
 		if str(it.get("id", "")) == id:
-			return it
-	return {}
+			if not bool(it.get("taken", false)):
+				return it
+			if gone.is_empty():
+				gone = it
+	return gone
 
 
 func slot_for(id: String) -> Control:
@@ -230,6 +294,7 @@ func mark_taken(id: String) -> void:
 	if it.is_empty():
 		return
 	it["taken"] = true
+	it["slot"] = -1
 	var s := slot_for(id)
 	if s != null:
 		s.set_item({})
@@ -270,7 +335,6 @@ func _refresh_text() -> void:
 		if bool(it.get("required", false)):
 			bb += "\n[i]Required.[/i]"
 	desc_box.text = bb
-	_fit_description()
 
 
 func _esc(s: String) -> String:
@@ -288,8 +352,8 @@ func _refresh_actions() -> void:
 	var acts: Array = it.get("actions", ["take"])
 	for a: Variant in acts:
 		var aid := str(a).strip_edges().to_lower()
-		if aid == "":
-			continue
+		if aid == "" or aid == "take":
+			continue        # taking is drag and drop only (no Take button)
 		var b := make_button(action_text(aid, it), Vector2(0, 30))
 		b.name = "Action_" + aid
 		b.pressed.connect(_do_action.bind(aid))

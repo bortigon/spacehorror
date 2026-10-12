@@ -53,6 +53,7 @@ var _font_mono: Font
 var _xf := Transform2D.IDENTITY
 var _t := 0.0
 var _pops: Dictionary = {}   # room id → Time.get_ticks_msec() of its stamp pop
+var _label_pops: Dictionary = {}   # room id → ticks: its name was just revealed (stamp-in like RESTRICTED)
 var _unlocks: Dictionary = {}  # door key → Time.get_ticks_msec() of its unlock animation
 var hover_marker := ""
 var hover_door := ""
@@ -62,8 +63,12 @@ const UNLOCK_SHAKE := 0.45
 const UNLOCK_TIME := 0.9
 ## A padlock / marker is this much easier to hit than it is to see (px).
 const HIT_GROW := 5.0
+const DOT_R := 2.6
+const COL_DOT := Color(0.88, 1.0, 0.82, 1.0)
+const COL_DOT_RING := Color(0.02, 0.12, 0.05, 0.95)
 const COL_MARKER := Color(0.42, 0.78, 0.38, 0.97)
 const COL_MARKER_EDGE := Color(0.82, 1.0, 0.8, 1.0)
+const COL_MARKER_COST := Color(0.98, 0.58, 0.16, 1.0)   # marker "cost": true (clicking it costs time)
 const COL_MARKER_INK := Color(0.02, 0.12, 0.05, 1.0)
 
 
@@ -81,7 +86,7 @@ func set_map(data: Dictionary) -> void:
 
 
 func _process(delta: float) -> void:
-	if is_visible_in_tree() and (str(map_data.get("current", "")) != "" or not _pops.is_empty() or not _unlocks.is_empty()):
+	if is_visible_in_tree() and (str(map_data.get("current", "")) != "" or not _pops.is_empty() or not _unlocks.is_empty() or not _label_pops.is_empty()):
 		_t += delta
 		queue_redraw()
 
@@ -90,6 +95,19 @@ func _process(delta: float) -> void:
 func pop_stamp(id: String) -> void:
 	_pops[id] = Time.get_ticks_msec()
 	queue_redraw()
+
+
+## Animate a room's NAME in, same stamp-in as RESTRICTED (scale 1.9 -> 1, fade, flash): a room
+## unlocked with its keycard (AIR LOCK). PdaScreen._unlock_door calls this.
+func pop_label(id: String) -> void:
+	_label_pops[id] = Time.get_ticks_msec()
+	queue_redraw()
+
+
+func label_age(id: String) -> float:
+	if not _label_pops.has(id):
+		return 999.0
+	return (Time.get_ticks_msec() - int(_label_pops[id])) / 1000.0
 
 
 ## Seconds since the room's stamp popped (large if it never did: fully shown).
@@ -156,7 +174,8 @@ func _door_visible(d: Dictionary) -> bool:
 	return sa == "explored" or sb == "explored" or bool(d.get("always_show", false)) or bool(d.get("known", false))
 
 
-## ---- markers: small green labelled rectangles inside a room ("LOCKER", "COFFEE POT", dropped items).
+## ---- markers: small green labelled rectangles inside a room ("LOCKER", "COFFEE POT", "WINDOW") and
+## dots with a name (dropped items).
 ## A marker is {id, room, label, rect: [x, y, w, h] as fractions of the room's bounding box, kind}.
 func markers() -> Array:
 	var out: Array = []
@@ -193,9 +212,47 @@ func marker_rect_local(id: String) -> Rect2:
 	return Rect2(a, b - a)
 
 
+## Dropped items ("drop", "pile") are a small DOT with the name beside it (like a city on a map), not a box.
+func is_dot(m: Dictionary) -> bool:
+	var k := str(m.get("kind", ""))
+	return k == "drop" or k == "pile"
+
+
+## Dot markers: the dot sits at the left of the marker cell, the name to its right.
+func dot_center_local(id: String) -> Vector2:
+	var r := marker_rect_local(id)
+	return Vector2(r.position.x + DOT_R + 1.0, r.position.y + r.size.y * 0.5)
+
+
+func dot_label_font_size(r: Rect2) -> int:
+	return clampi(int(r.size.y * 0.62), 7, 11)
+
+
+## The label of a dot marker as drawn (shortened with "." to fit its cell).
+func dot_label(m: Dictionary, r: Rect2) -> String:
+	var label := str(m.get("label", m.get("id", ""))).to_upper()
+	var fs := dot_label_font_size(r)
+	var room := r.size.x - (DOT_R * 2.0 + 6.0)
+	while label.length() > 3 and _font_label.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > room:
+		label = label.substr(0, label.length() - 2).strip_edges() + "."
+	return label
+
+
+## What a click / a dropped item hits: the whole box for box markers, dot + name for dot markers.
+func marker_hit_rect(id: String) -> Rect2:
+	var m := find_marker(id)
+	var r := marker_rect_local(id)
+	if m.is_empty() or r.size.x <= 0.0 or not is_dot(m) or _font_label == null:
+		return r
+	var fs := dot_label_font_size(r)
+	var w := _font_label.get_string_size(dot_label(m, r), HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var c := dot_center_local(id)
+	return Rect2(Vector2(c.x - DOT_R, r.position.y), Vector2(DOT_R * 2.0 + 5.0 + w, r.size.y))
+
+
 func marker_at(local_pos: Vector2) -> String:
 	for m: Dictionary in markers():
-		if marker_rect_local(str(m.get("id", ""))).grow(2.0).has_point(local_pos):
+		if marker_hit_rect(str(m.get("id", ""))).grow(2.0).has_point(local_pos):
 			return str(m.get("id", ""))
 	return ""
 
@@ -310,8 +367,12 @@ func _scale() -> float:
 
 # ---------------------------------------------------------------- drawing
 
+## Background of the drawing (pda_screen sets the holo windows' green, WIN_BG, for the game maps).
+var bg_color := COL_BG
+
+
 func _draw() -> void:
-	draw_rect(Rect2(Vector2.ZERO, size), COL_BG)
+	draw_rect(Rect2(Vector2.ZERO, size), bg_color)
 	if map_data.is_empty():
 		return
 	_update_xform()
@@ -391,9 +452,13 @@ func _draw_room_label(id: String, room: Dictionary) -> void:
 	var explored := str(room.get("state", "")) == "explored"
 	if not explored and not bool(room.get("known", false)):
 		return   # unexplored rooms stay nameless until their name is known
+	var label := str(room.get("label", id)).to_upper()
+	var eg := edge_label_geom(id, label)
+	if not eg.is_empty():
+		_draw_label_at(id, label, eg["c"], float(eg["rot"]), int(eg["fs"]), explored)
+		return
 	var pts := _screen_poly(room)
 	var c := _poly_center(pts)
-	var label := str(room.get("label", id)).to_upper()
 	var fs := 10 if compact else clampi(int(_scale() * 7.0), 11, 18)
 	var poly_w := _poly_width_at(pts, c.y)
 	var want := _font_label.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
@@ -416,8 +481,110 @@ func _draw_room_label(id: String, room: Dictionary) -> void:
 	if id == str(map_data.get("current", "")):
 		y_off = fs * 0.9 + (4.0 if compact else 8.0)  # sit under the you-are-here marker
 	var pos := Vector2(c.x - sz.x * 0.5, c.y + y_off + fs * 0.35)
+	var age := label_age(id)
+	if age < STAMP_FLASH + 0.2:
+		# stamp-in: the name lands like the RESTRICTED stamp (scaled down from 1.9, fading in, a flash)
+		var k := clampf(age / STAMP_POP, 0.0, 1.0)
+		var sc := lerpf(1.9, 1.0, 1.0 - pow(1.0 - k, 3.0))
+		var a := clampf(age / 0.18, 0.0, 1.0)
+		var mid := pos + Vector2(sz.x * 0.5, -fs * 0.35)
+		var box := Vector2(sz.x + 10.0, fs + 6.0)
+		draw_set_transform(mid, 0.0, Vector2(sc, sc))
+		var flash := clampf(1.0 - age / STAMP_FLASH, 0.0, 1.0)
+		draw_rect(Rect2(-box * 0.5, box), Color(COL_LABEL, 0.35 * flash * a))
+		draw_rect(Rect2(-box * 0.5, box), Color(COL_LABEL, a * flash), false, 1.5)
+		draw_string(_font_label, Vector2(-sz.x * 0.5, fs * 0.35), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs,
+			Color(COL_LABEL if explored else COL_LABEL.lerp(COL_LABEL_DIM, 1.0 - flash), a))
+		draw_set_transform_matrix(Transform2D.IDENTITY)
+		if age > STAMP_FLASH + 0.15:
+			_label_pops.erase(id)
+		return
 	draw_string(_font_label, pos + Vector2(1, 1), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0, 0, 0, 0.6))
 	draw_string(_font_label, pos, label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, COL_LABEL if explored else COL_LABEL_DIM)
+
+
+## ROOM LABELS RELATIVE TO THE PLAYER: a room next to the player's room (a door between them) gets
+## its name along the edge by that door, oriented so it reads from the player's side: a room to the
+## WEST reads bottom to top (rotated -90, the AIR LOCK beside the READY ROOM), a room to the EAST reads
+## top to bottom (+90; STBD HOLD / RESTRICTED), rooms north / south read normally along their edge.
+## Letters always stand on the shared edge. Recomputed from map_data["current"] at every draw, so
+## moving rooms re-lays every label. {} = not adjacent (centred label as before).
+## Returns {c (centre), rot, fs, side ("w" | "e" | "n" | "s" = which side of the player the room is)}.
+func edge_label_geom(id: String, text: String) -> Dictionary:
+	var here := str(map_data.get("current", ""))
+	if here == "" or id == here:
+		return {}
+	var door := {}
+	for d: Dictionary in map_data.get("doors", []):
+		var da := str(d.get("a", ""))
+		var db := str(d.get("b", ""))
+		if (da == here and db == id) or (db == here and da == id):
+			door = d
+			break
+	if door.is_empty():
+		return {}
+	var pts := _screen_poly((map_data.get("rooms", {}) as Dictionary).get(id, {}))
+	if pts.size() < 3:
+		return {}
+	var rr := _pts_rect(pts)
+	var dc: Vector2 = _xf * (door.get("pos", rr.get_center()) as Vector2)
+	var dl := absf(dc.x - rr.position.x)
+	var dr := absf(rr.end.x - dc.x)
+	var dt := absf(dc.y - rr.position.y)
+	var dbm := absf(rr.end.y - dc.y)
+	var m := minf(minf(dl, dr), minf(dt, dbm))
+	var vertical := m == dl or m == dr
+	var avail := (rr.size.y if vertical else rr.size.x) - 8.0
+	var fs := 10 if compact else clampi(int(_scale() * 7.0), 11, 18)
+	var tw := _font_label.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	while fs > 7 and tw > avail:
+		fs -= 1
+		tw = _font_label.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var inset := fs * 0.8 + 3.0
+	var half := minf(tw * 0.5 + 4.0, (avail + 8.0) * 0.5)
+	var c := Vector2.ZERO
+	var rot := 0.0
+	var side := ""
+	if m == dr:      # the door is on the room's east edge: the room is WEST of the player
+		c = Vector2(rr.end.x - inset, clampf(dc.y, rr.position.y + half, rr.end.y - half))
+		rot = -PI * 0.5
+		side = "w"
+	elif m == dl:    # the room is EAST of the player
+		c = Vector2(rr.position.x + inset, clampf(dc.y, rr.position.y + half, rr.end.y - half))
+		rot = PI * 0.5
+		side = "e"
+	elif m == dt:    # door on its north edge: the room is SOUTH of the player
+		c = Vector2(clampf(dc.x, rr.position.x + half, rr.end.x - half), rr.position.y + inset)
+		side = "s"
+	else:            # the room is NORTH of the player
+		c = Vector2(clampf(dc.x, rr.position.x + half, rr.end.x - half), rr.end.y - inset)
+		side = "n"
+	return {"c": c, "rot": rot, "fs": fs, "tw": tw, "side": side}
+
+
+## One (possibly rotated) room name centred on c, with the stamp-in reveal when it was just unlocked.
+func _draw_label_at(id: String, label: String, c: Vector2, rot: float, fs: int, explored: bool) -> void:
+	var sz := _font_label.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+	var age := label_age(id)
+	var sc := 1.0
+	var a := 1.0
+	var flash := 0.0
+	if age < STAMP_FLASH + 0.2:
+		var k := clampf(age / STAMP_POP, 0.0, 1.0)
+		sc = lerpf(1.9, 1.0, 1.0 - pow(1.0 - k, 3.0))
+		a = clampf(age / 0.18, 0.0, 1.0)
+		flash = clampf(1.0 - age / STAMP_FLASH, 0.0, 1.0)
+		if age > STAMP_FLASH + 0.15:
+			_label_pops.erase(id)
+	draw_set_transform(c, rot, Vector2(sc, sc))
+	if flash > 0.0:
+		var box := Vector2(sz.x + 10.0, fs + 6.0)
+		draw_rect(Rect2(-box * 0.5, box), Color(COL_LABEL, 0.35 * flash * a))
+		draw_rect(Rect2(-box * 0.5, box), Color(COL_LABEL, a * flash), false, 1.5)
+	var o := Vector2(-sz.x * 0.5, fs * 0.35)
+	draw_string(_font_label, o + Vector2(1, 1), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0, 0, 0, 0.6 * a))
+	draw_string(_font_label, o, label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(COL_LABEL if explored else COL_LABEL_DIM, a))
+	draw_set_transform_matrix(Transform2D.IDENTITY)
 
 
 ## RESTRICTED stamp geometry: centre, rotation (tall narrow rooms get it vertical), font size,
@@ -427,6 +594,12 @@ func _stamp_geom(id: String) -> Dictionary:
 	if pts.size() < 3:
 		return {}
 	var rr := _pts_rect(pts)
+	var eg := edge_label_geom(id, STAMP_TEXT)
+	if not eg.is_empty():
+		# next to the player's room: along the shared edge, readable from there (see edge_label_geom)
+		var efs := mini(int(eg["fs"]), 9 if compact else 15)
+		var etw := _font_label.get_string_size(STAMP_TEXT, HORIZONTAL_ALIGNMENT_LEFT, -1, efs).x
+		return {"c": eg["c"], "rot": eg["rot"], "fs": efs, "tw": etw, "box": Vector2(etw + 10.0, efs + 8.0)}
 	var fs := 9 if compact else clampi(int(_scale() * 5.5), 10, 15)
 	var tw := _font_label.get_string_size(STAMP_TEXT, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	var rot := 0.0
@@ -497,7 +670,7 @@ func _draw_door(d: Dictionary) -> void:
 	var half := maxf(9.0 * _scale(), 5.0)
 	var cap := maxf(3.0 * _scale(), 2.5)
 	# cut a gap in the wall, then draw the doorway bracket |—| like the mockup
-	draw_line(c - along * half, c + along * half, COL_BG, maxf(5.0 * _scale(), 4.0))
+	draw_line(c - along * half, c + along * half, bg_color, maxf(5.0 * _scale(), 4.0))
 	var w := 2.0 if not compact else 1.5
 	if open:
 		draw_line(c - along * half, c + along * half, col, w, true)
@@ -528,8 +701,15 @@ func _draw_markers() -> void:
 		if r.size.x < 4.0:
 			continue
 		var hot := id == hover_marker
+		if is_dot(m):
+			_draw_dot_marker(m, r, hot)
+			continue
 		draw_rect(r, COL_MARKER.lightened(0.18) if hot else COL_MARKER)
-		draw_rect(r, Color.WHITE if hot else COL_MARKER_EDGE, false, 1.5 if hot else 1.0)
+		if bool(m.get("cost", false)):
+			# costs TIME (an unsearched LOCKER): orange border, the colour of the time-cost / lock cues
+			draw_rect(r, COL_MARKER_COST, false, 2.0 if hot else 1.6)
+		else:
+			draw_rect(r, Color.WHITE if hot else COL_MARKER_EDGE, false, 1.5 if hot else 1.0)
 		var label := str(m.get("label", id)).to_upper()
 		var fs := clampi(int(r.size.y * 0.62), 7, 14)
 		while fs > 7 and _font_label.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > r.size.x - 4.0:
@@ -539,6 +719,25 @@ func _draw_markers() -> void:
 		var sz := _font_label.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
 		draw_string(_font_label, Vector2(r.position.x + (r.size.x - sz.x) * 0.5, r.position.y + (r.size.y + float(fs) * 0.7) * 0.5),
 			label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, COL_MARKER_INK)
+
+
+func _draw_dot_marker(m: Dictionary, r: Rect2, hot: bool) -> void:
+	var id := str(m.get("id", ""))
+	var c := dot_center_local(id)
+	var pile := str(m.get("kind", "")) == "pile"
+	var col := COL_HOVER if hot else COL_DOT
+	draw_circle(c, DOT_R + 1.4, COL_DOT_RING)
+	draw_circle(c, DOT_R, col)
+	if pile:
+		draw_arc(c, DOT_R + 2.6, 0.0, TAU, 16, col, 1.0, true)
+	var fs := dot_label_font_size(r)
+	var label := dot_label(m, r)
+	var pos := Vector2(c.x + DOT_R + 4.0, c.y + float(fs) * 0.35)
+	draw_string(_font_label, pos + Vector2(1, 1), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, COL_DOT_RING)
+	draw_string(_font_label, pos, label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
+	if hot:
+		var hr := marker_hit_rect(id)
+		draw_line(Vector2(pos.x, pos.y + 2.0), Vector2(hr.end.x, pos.y + 2.0), col, 1.0)
 
 
 func _draw_dashes(a: Vector2, b: Vector2, col: Color, w: float) -> void:

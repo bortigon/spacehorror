@@ -108,6 +108,9 @@ var act_hours_live := false
 ## function: its text, one option per item, and Back.
 var container_handler: Callable
 var _act_stack: Array[String] = []
+## An act that replaces the text (a function act) was opened: id + spec. The chapter files a log entry
+## when the spec has "log".
+signal act_opened(act_id: String, spec: Dictionary)
 var _in_act := false
 var _unwritten := ""
 
@@ -641,12 +644,24 @@ func open_act(act_id: String) -> void:
 		_render()
 		return
 	_unwritten = ""
-	if (bool(spec.get("container", false)) or spec.has("station")) and container_handler.is_valid():
+	if (bool(spec.get("container", false)) or spec.has("station") or spec.has("log")) and container_handler.is_valid():
 		container_handler.call(id, spec)
 		return
 	_act_stack.append(id)
 	_in_act = true
 	_begin_text(str(spec.get("text", "")))
+	act_opened.emit(id, spec)
+
+
+## A map marker was clicked: the act opens from the screen's own text (not on top of another act).
+func open_act_root(act_id: String) -> void:
+	var id := act_id.strip_edges().to_lower()
+	if not _act_stack.is_empty() and _act_stack.back() == id and not is_container(id):
+		return
+	if not _act_stack.is_empty() and not is_container(id):
+		_act_stack.clear()
+		_in_act = false
+	open_act(id)
 
 
 ## Back is not authored. It replays the caller (the previous act, or the screen) and does not advance.
@@ -705,7 +720,7 @@ func _act_spec(act_id: String) -> Dictionary:
 ## True when the act is a container (acts with "container": true).
 func is_container(act_id: String) -> bool:
 	var spec := _raw_act_spec(act_id)
-	return bool(spec.get("container", false)) or spec.has("station")
+	return bool(spec.get("container", false)) or spec.has("station") or spec.has("log")
 
 
 func _raw_act_spec(act_id: String) -> Dictionary:

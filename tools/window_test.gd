@@ -30,6 +30,17 @@ func frames(n: int) -> void:
 	for i in n:
 		await process_frame
 
+## The locker asks "Searching the locker will take 1 hr. Are you sure?" first: answer Yes and wait out the fade.
+func open_locker() -> void:
+	pda.stage.open_act("locker")
+	await frames(2)
+	if pda.confirm_box != null and pda.confirm_box.visible:
+		pda.confirm_box.answer(true)
+		await create_timer(1.15).timeout
+		pda.stage.open_act("locker")      # searching does not open it: click the searched locker again
+		await frames(2)
+
+
 
 func key(code: Key, shift := false) -> InputEventKey:
 	var e := InputEventKey.new()
@@ -46,6 +57,7 @@ func press(code: Key, shift := false) -> void:
 
 func spawn(scene_path: String, screen: int) -> void:
 	pda = (load(scene_path) as PackedScene).instantiate()
+	pda.vars["rail_tabs"] = ["sta", "inv", "log", "map"]   # every button (the dynamic menu is tested in ready_test)
 	root.add_child(pda)
 	current_scene = pda
 	await frames(3)
@@ -88,12 +100,13 @@ func test_data() -> void:
 		var items: Array = lk.get("items", [])
 		check("data %s: ready room locker is a container with suit + lantern + airlock keycard" % path.get_file(),
 			bool(lk.get("container", false)) and str(lk["title"]) == "LOCKER" and items.size() == 3
-			and str(items[0]["id"]) == "suit" and not bool(items[0]["required"]) and int(items[0]["hours"]) == 1
-			and str(items[1]["id"]) == "lantern" and int(items[1]["hours"]) == 1
-			and str(items[2]["id"]) == "airlock_keycard" and str(items[2]["label"]) == "AIRLOCK KEYCARD" and int(items[2]["hours"]) == 1
+			and str(items[0]["id"]) == "suit" and not bool(items[0]["required"]) and int(items[0]["hours"]) == 0
+			and str(items[1]["id"]) == "lantern" and int(items[1]["hours"]) == 0
+			and str(items[2]["id"]) == "airlock_keycard" and str(items[2]["label"]) == "AIRLOCK KEYCARD" and int(items[2]["hours"]) == 0
+			and lk["search"]["hours"] == 1 and lk["search"]["text"] == "Searching the locker will take 1 hr. Are you sure?"
 			and items[0]["actions"] == ["take"] and int(lk["grid"]["cols"]) == 3 and int(lk["grid"]["rows"]) == 3
 			and not str(lk["text"]).contains("does not spend") and not lk.has("choices")
-			and str(rr["text"]).contains("[act=locker]LOCKER[/act]") and str(rr["text"]).contains("[act=coffee]COFFEE POT[/act]")
+			and str(rr["text"]).contains("[act=locker]LOCKERS[/act]") and str(rr["text"]).contains("[act=coffee]COFFEE POT[/act]")
 			and not str(rr["text"]).contains("does not spend"))
 		check("data %s: the way out is the airlock door on the map, no SUIT REQUIRED gate" % path.get_file(),
 			str((rr["end"] as Dictionary)["type"]) == "hold" and str((rr["end"] as Dictionary)["exit"]) == "door:ready_room|airlock"
@@ -172,7 +185,7 @@ func test_ready_room() -> void:
 	var cont = w.container
 	var chr = w.character
 	check("no window is up before the locker is clicked", not w.any_open() and not w.visible and not pda.windows_open())
-	pda.stage.open_act("locker")
+	await open_locker()
 	await frames(2)
 	check("locker click: container window AND character screen open", w.container_open() and w.character_open()
 		and w.visible and w.mouse_filter == Control.MOUSE_FILTER_STOP)
@@ -186,10 +199,10 @@ func test_ready_room() -> void:
 		and is_equal_approx(chr.base_pos.y, roundf((vp.y - chr.panel_size.y) * 0.5))
 		and is_equal_approx(cont.base_pos.y, roundf((vp.y - cont.panel_size.y) * 0.5))
 		and chr.position.is_equal_approx(chr.base_pos) and chr.panel_size.y >= 300 and cont.panel_size.y >= 300)
-	check("container: title top-left, description under it in a wider left column (no scroll bar), grid on the right",
+	check("container: title top-left, description under it in a wider left column (fixed size + font, scrolls if long), grid on the right",
 		cont.title_label.text == "LOCKER" and cont.title_label.position.y < cont.desc_box.position.y
 		and cont.desc_box.position.x + cont.desc_box.size.x <= cont.grid_bg.position.x
-		and cont.desc_box.size.x > cont.panel_size.x * 0.3 and not cont.desc_box.scroll_active and cont.description_fits()
+		and cont.desc_box.size.x > cont.panel_size.x * 0.3 and cont.desc_box.scroll_active and cont.desc_font_size() == 10
 		and cont.grid_bg.position.x >= cont.panel_size.x * 0.4 and cont.desc_box.text.contains("The locker is in front of you")
 		and cont.slots.size() == 9 and cont.slot_for("suit") != null and cont.slot_for("lantern") != null
 		and cont.exit_button.position.x + cont.exit_button.size.x > cont.panel_size.x * 0.75
@@ -206,33 +219,33 @@ func test_ready_room() -> void:
 	check("no item highlighted: no action button, EXIT is there", cont.action_buttons.is_empty() and cont.exit_button.visible)
 	cont.slot_for("suit").pressed.emit(cont.slot_for("suit"))
 	await frames(1)
-	check("click highlights SUIT: its detail shows in the left area, button reads Take SUIT (1 hr)",
+	check("click highlights SUIT: its detail shows in the left area, NO Take button (drag and drop only)",
 		cont.selected_id == "suit" and cont.slot_for("suit").selected and cont.desc_box.text.contains("Pressure suit")
-		and cont.action_buttons.size() == 1 and cont.action_buttons[0].text == "Take SUIT (1 hr)")
+		and cont.action_buttons.is_empty())
 	cont.slot_for("lantern").pressed.emit(cont.slot_for("lantern"))
 	await frames(1)
-	check("highlighting LANTERN swaps the button", cont.action_buttons.size() == 1 and cont.action_buttons[0].text == "Take LANTERN (1 hr)"
+	check("highlighting LANTERN swaps the selection (still no button)", cont.action_buttons.is_empty() and cont.selected_id == "lantern"
 		and not cont.slot_for("suit").selected)
 	cont.select_id("suit")
-	cont.action_buttons[0].pressed.emit()
+	cont.do_action("take")
 	await frames(2)
-	check("Take SUIT: in the inventory, flag set, 1 hr really spent (8 -> 7), cell empty, button gone",
+	check("take SUIT: in the inventory, flag set, FREE (the 1 hr was the search: 8 -> 7), cell empty, button gone",
 		pda.inventory.has(&"suit") and pda.has_flag("has_suit") and pda.time_blocks == 7 and cont.slot_for("suit") == null
 		and cont.action_buttons.is_empty() and cont.remaining() == 2 and cont.find_item("suit")["taken"])
 	check("character screen now carries SUIT, selected, with its detail", chr.filled_ids() == PackedStringArray(["suit"])
 		and chr.selected_id == "suit" and chr.desc_body.text.contains("Pressure suit"))
-	# drag and drop LANTERN onto the character grid
+	# drag and drop LANTERN onto the character grid (our own drag: it sticks to the cursor)
 	var ls: Control = cont.slot_for("lantern")
-	var data: Variant = ls._get_drag_data(Vector2.ZERO)
 	var target: Control = chr.slots[0]
-	check("drag a container item: payload names it, the character grid accepts it",
-		data is Dictionary and str(data["id"]) == "lantern" and target._can_drop_data(Vector2.ZERO, data)
-		and not target._can_drop_data(Vector2.ZERO, {"kind": "other"}) and chr.can_drop(data))
-	target._drop_data(Vector2.ZERO, data)
+	ls.start_drag_now(ls.get_global_rect().get_center())
+	await frames(1)
+	check("drag a container item: it is stuck to the cursor, windows stay up (nothing left them)",
+		w.drag_active() and str(w.drag_item()["id"]) == "lantern" and w.ghost_visible() and not w.drag_hidden())
+	var res: String = w.release_drag(target.get_global_rect().get_center())
 	await frames(2)
-	check("drag LANTERN: inventory + light flag, 1 more hr spent (7 -> 6), container keeps the keycard, cell empty",
-		pda.inventory.has(&"lantern") and pda.has_flag("has_lantern") and cont.remaining() == 1 and cont.slot_for("lantern") == null
-		and pda.time_blocks == 6 and chr.filled_ids().size() == 2 and not target._can_drop_data(Vector2.ZERO, data))
+	check("drag LANTERN onto the character screen: taken (result taken), free, container keeps the keycard, cell empty",
+		res == "taken" and pda.inventory.has(&"lantern") and pda.has_flag("has_lantern") and cont.remaining() == 1 and cont.slot_for("lantern") == null
+		and pda.time_blocks == 7 and chr.filled_ids().size() == 2 and not w.drag_active())
 	var tips: Array = []
 	for s2: Control in chr.slots:
 		if not s2.item.is_empty() and not s2.dim:
@@ -243,7 +256,7 @@ func test_ready_room() -> void:
 	check("EXIT closes the container and the character screen it opened", not w.container_open() and not w.character_open()
 		and cont.is_closed() and chr.is_closed() and not w.visible and w.mouse_filter == Control.MOUSE_FILTER_STOP)
 	# reopening: taken items stay taken
-	pda.stage.open_act("locker")
+	await open_locker()
 	await frames(2)
 	check("reopen: suit + lantern already taken, cells empty, the keycard is still there", cont.remaining() == 1
 		and cont.slot_for("suit") == null and cont.slot_for("airlock_keycard") != null and chr.filled_ids().size() == 2)
@@ -255,17 +268,17 @@ func test_ready_room() -> void:
 	# taking costs hours that are really spent, and is refused when there are not enough
 	await spawn(SCENE, 2)
 	check("ready room arms the 8 hour blocks", pda.time_blocks_live and pda.time_blocks == 8)
-	pda.stage.open_act("locker")
+	await open_locker()
 	await frames(2)
 	pda.windows.container.select_id("suit")
-	pda.windows.container.action_buttons[0].pressed.emit()
+	pda.windows.container.do_action("take")
 	await frames(2)
 	check("Take spends the hour from the bar", pda.time_blocks == 7 and pda.inventory.has(&"suit"))
 	await drop(pda)
 
 	# the outline target scene (new_scene_2) behaves the same
 	await spawn(NEW_SCENE, 0)
-	pda.stage.open_act("locker")
+	await open_locker()
 	await frames(2)
 	check("new_scene_2 ready room: locker opens the window pair with SUIT + LANTERN",
 		pda.windows.container_open() and pda.windows.character_open() and pda.windows.container.find_item("lantern").size() > 0)
@@ -305,7 +318,15 @@ func test_keys_and_closing() -> void:
 	var advanced := [0]
 	pda.stage.continue_pressed.connect(func() -> void: advanced[0] += 1)
 	var tab_before: int = pda.current_tab
-	for code: Key in [KEY_TAB, KEY_C, KEY_I]:
+	press(KEY_TAB)
+	await frames(1)
+	check("TAB from the room text goes down the rail to INV (the character screen)", w.character_open())
+	press(KEY_TAB)
+	await frames(1)
+	check("TAB again moves on to LOG (the character screen closes)", not w.character_open() and pda.log_open())
+	w.close_all(true)
+	await frames(1)
+	for code: Key in [KEY_C, KEY_I]:
 		press(code)
 		await frames(1)
 		var opened: bool = w.character_open() and not w.container_open()
@@ -335,7 +356,7 @@ func test_keys_and_closing() -> void:
 	# the player opened the character screen first: it stays when the container closes
 	press(KEY_I)
 	await frames(1)
-	pda.stage.open_act("locker")
+	await open_locker()
 	await frames(1)
 	check("container opens beside an already-open character screen", w.character_open() and w.container_open()
 		and not w._char_auto)
@@ -362,14 +383,14 @@ func test_keys_and_closing() -> void:
 	await frames(1)
 	check("second Esc closes the character screen", not w.any_open())
 	# auto-opened character screen goes with the container on Esc
-	pda.stage.open_act("locker")
+	await open_locker()
 	await frames(1)
 	check("container alone auto-opened the character screen", w._char_auto and w.character_open())
 	press(KEY_ESCAPE)
 	await frames(1)
 	check("Esc on that pair closes both", not w.any_open() and not w.visible)
 	# click-eater: the layer swallows clicks while up
-	pda.stage.open_act("locker")
+	await open_locker()
 	await frames(1)
 	var click := InputEventMouseButton.new()
 	click.button_index = MOUSE_BUTTON_LEFT
@@ -434,7 +455,7 @@ func test_real_input() -> void:
 	var w = pda.windows
 	var cont = w.container
 	var chr = w.character
-	pda.stage.open_act("locker")
+	await open_locker()
 	await frames(2)
 	# a click on the story text under the window must not reach the story
 	var advanced := [0]
@@ -445,8 +466,8 @@ func test_real_input() -> void:
 	await click(cont.slot_for("suit").get_global_rect().get_center())
 	check("real click on an item highlights it", cont.selected_id == "suit")
 	await frames(2)
-	await click(cont.action_buttons[0].get_global_rect().get_center())
-	check("real click on Take SUIT moves it to the inventory", pda.inventory.has(&"suit") and cont.slot_for("suit") == null)
+	cont.do_action("take")     # (no Take button any more; the take path itself is unchanged)
+	check("take path moves it to the inventory", pda.inventory.has(&"suit") and cont.slot_for("suit") == null)
 	var from: Vector2 = cont.slot_for("lantern").get_global_rect().get_center()
 	var to: Vector2 = chr.slots[7].get_global_rect().get_center()
 	mouse_move(from)
@@ -459,16 +480,15 @@ func test_real_input() -> void:
 		mouse_move(p, MOUSE_BUTTON_MASK_LEFT, p - prev)
 		prev = p
 		await process_frame
-	var dragging := root.gui_is_dragging()
+	var dragging: bool = w.drag_active()
 	mouse_button(to, false)
 	await frames(2)
 	check("real drag of LANTERN onto the character grid takes it", dragging and pda.inventory.has(&"lantern") and cont.remaining() == 1)
 	await click(cont.exit_button.get_global_rect().get_center())
 	check("real click on EXIT closes the pair", not w.any_open())
-	pda.stage.open_act("locker")
+	await open_locker()
 	await frames(2)
-	await click(chr.close_button.get_global_rect().get_center())
-	check("real click on the character X closes just the character screen", not w.character_open() and w.container_open())
+	check("round 7: the character screen has NO X (EXIT closes the pair)", not chr.close_button.visible and w.character_open())
 	await drop(pda)
 
 

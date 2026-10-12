@@ -214,8 +214,15 @@ func _ensure_ui() -> void:
 		_load_scene_ui()
 	else:
 		var list := SceneData.list_scenes()
-		if not list.is_empty():
-			open_scene(list[0])
+		var first := ""
+		for e: Dictionary in preload("res://ui/scene_order.gd").flat_screens():   # the first scene on the outline
+			var t := str(e.get("target", ""))
+			if first == "" and t.begins_with("scene:") and list.has(t.substr(6).get_slice("/", 0)):
+				first = t.substr(6).get_slice("/", 0)
+		if first == "" and not list.is_empty():
+			first = list[0]
+		if first != "":
+			open_scene(first)
 		else:
 			new_scene()
 	_rebuilding = false

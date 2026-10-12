@@ -19,3 +19,9 @@ Still on this ship, before they leave.
 
 ### READY ROOM
 - scene:new_scene_2/ready_room — READY ROOM
+
+## EXCURSION 1
+Out through the air lock.
+
+### AIR LOCK
+- scene:airlock/airlock — AIR LOCK

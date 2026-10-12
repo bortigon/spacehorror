@@ -292,7 +292,11 @@ static func _normalize_act_body(a: Dictionary) -> Dictionary:
 		for c: Variant in rc:
 			if c is Dictionary:
 				choices.append(_normalize_act_choice(c))
-	return {"text": str(a.get("text", "")), "choices": choices}
+	var out := {"text": str(a.get("text", "")), "choices": choices}
+	for k: Variant in a:   # "marker" (a map box that opens it), "log" (files a log entry), ...
+		if not out.has(k) and k != "actions" and k != "container" and k != "station":
+			out[k] = a[k]
+	return out
 
 
 ## A station act ("station": "coffee") opens a code-defined window (ui/station_window.gd) with a
@@ -511,7 +515,7 @@ static func validate(src: Dictionary, known_scenes: PackedStringArray = PackedSt
 			"hold":
 				if str(end["goto"]) != "":
 					_check_target(out, i, name + " CONTINUE", str(end["goto"]), d, ids, known_scenes, false)
-				if not last:
+				if not last and str(end.get("exit", "")) == "":   # a room left by a door / map move may sit anywhere
 					out.append(_p("warning", i, "%s holds (ends the scene) but is not the last screen." % name))
 	return out
 

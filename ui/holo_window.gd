@@ -47,6 +47,7 @@ var open_amount := 0.0              # 0 closed .. 1 fully open
 var base_pos := Vector2.ZERO        # where the window sits (the manager centres it)
 var body: Control
 var fx: ColorRect
+var drag_hidden := false
 var animate := true                 # false: open()/close() snap (tests, reduced motion)
 
 var _clip: Control
@@ -136,6 +137,15 @@ func _on_opening() -> void:
 	pass
 
 
+## An item is being dragged out of the windows: hide this one (its state stays) until it comes back.
+func set_drag_hidden(on: bool) -> void:
+	drag_hidden = on
+	if on:
+		visible = false
+	elif state != State.CLOSED:
+		visible = true
+
+
 func is_closed() -> bool:
 	return state == State.CLOSED
 
@@ -159,7 +169,7 @@ func open() -> void:
 	_on_opening()
 	_kill_tween()
 	_seed = randf() * 50.0
-	visible = true
+	visible = not drag_hidden
 	state = State.OPENING
 	set_process(true)
 	if not animate:

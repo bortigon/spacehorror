@@ -270,7 +270,7 @@ Field by field:
 | `sfx` | list of `{"clip": "res://…", "line": 2}` or `{"clip": "res://…", "at": 1.5}` |
 | `question` | pinned question after a response ("" = last line of the screen) |
 | `end` | `{"type": "continue", "goto": "next"}` · `{"type": "choices", "choices": [...]}` · `{"type": "death", "heading": "", "message": "", "retry": ""}` · `{"type": "qte", "label": "", "seconds": 8, "goto": "", "fail_message": "", "retry": ""}` · `{"type": "map_tour", "tips": [{"text": "", "target": "map"}], "move_to": "ready_room", "move_prompt": "", "on_arrive": [], "goto": "next"}` · `{"type": "hold", "goto": ""}` |
-| tip `target` | `map` (whole map + you dot) · `rooms` (every room) · `room:<id>` (e.g. `room:stasis_15`) · `door:<a>\|<b>` (e.g. `door:ready_room\|stbd_hold`); room ids are in `data/vessel.gd` |
+| tip `target` | `map` (whole map + you dot) · `rooms` (every room) · `room:<id>` (e.g. `room:stasis_3`) · `door:<a>\|<b>` (e.g. `door:ready_room\|stbd_hold`); room ids are in `data/vessel.gd` |
 | scene `ui` | `"stage"` (default, full-screen story stage) or `"game"` (inside the main game UI) |
 | scene `fade_in` | seconds of fade from black when the scene opens (0 = none) |
 | choice `if` | only show the choice when a flag is set: `"brave"`, `"!brave"`, `"a,b"` |
@@ -293,31 +293,48 @@ A screen's `acts` is a dictionary keyed by the id in `[act=id]word[/act]`. Two k
     "text": "description lines shown under the title",
     "grid": {"cols": 3, "rows": 3},
     "items": [
-      {"id": "suit", "label": "SUIT", "hours": 1, "required": false, "detail": "Pressure suit. Putting it on takes 1 hr.", "actions": ["take"]},
-      {"id": "lantern", "label": "LANTERN", "hours": 1, "required": false, "detail": "Light.", "actions": ["take"]},
-      {"id": "airlock_keycard", "label": "AIRLOCK KEYCARD", "hours": 1, "required": false, "detail": "Opens the airlock door.", "actions": ["take"]}
+      {"id": "suit", "label": "SUIT", "hours": 0, "required": false, "detail": "Pressure suit. Put it on before you go outside.", "actions": ["take"]},
+      {"id": "lantern", "label": "LANTERN", "hours": 0, "required": false, "detail": "Light.", "actions": ["take"]},
+      {"id": "airlock_keycard", "label": "AIRLOCK KEYCARD", "hours": 0, "required": false, "detail": "Opens the airlock door.", "actions": ["take"]}
     ],
+    "search": {"hours": 1, "text": "Searching the locker will take 1 hr. Are you sure?"},
     "marker": {"room": "ready_room", "label": "LOCKER", "rect": [0.03, 0.05, 0.24, 0.17]}
   },
   "coffee": {
     "station": "coffee",
     "title": "COFFEE POT",
-    "text": "A coffee pot sits on the counter beside the locker.",
-    "marker": {"room": "ready_room", "label": "COFFEE POT", "rect": [0.63, 0.05, 0.34, 0.17]}
+    "text": "The coffee pot is empty and cold. ...",
+    "marker": {"room": "ready_room", "label": "COFFEE POT", "rect": [0.65, 0.05, 0.32, 0.17]}
+  },
+  "window": {
+    "text": "You step over to the window ... the [act=abeyance]RSV ABEYANCE[/act] ...",
+    "choices": [],
+    "marker": {"room": "ready_room", "label": "WINDOW", "rect": [0.33, 0.05, 0.29, 0.17]}
+  },
+  "abeyance": {
+    "text": "RSV ABEYANCE - The RSV ABEYANCE is ...",
+    "choices": [],
+    "log": {"id": "abeyance", "title": "RSV ABEYANCE", "filed": "SHIP LOG"}
   }
 }
 ```
 
-- No `container` key: a **function**. Clicking the word replaces the screen text with `text` and shows `choices` plus an automatic Back that returns to the caller's text.
+- No `container` key: a **function**. Clicking the word replaces the screen text with `text` and shows `choices` plus an automatic Back that returns to the caller's text (functions can nest: WINDOW -> RSV ABEYANCE -> Back -> Back). A function may have a `marker` too (the WINDOW box opens the sub-screen from the map).
+- `"log": {"id", "title", "filed", "category"}` on an act: clicking it files a LOG entry once (its `text` is the entry; `vars.log_entries`, also filed as a dossier with a "FILED: <title>" line) and opens the LOG pop-up on it (the story text stays). Without the game UI it reads as a function with Back.
+- `"search": {"hours": 1, "text": "..."}` on a container: clicking it asks Yes / No first. Yes spends the hours (every opening is a new search), fades to black and back, then opens the window. The first time any such prompt appears, a 2-step tip runs before the player can answer ("TIP: Some actions require Time." on the "1 hr", "Missions are limited to 8 Hours." on the time bar; flag `tut_time_done`).
 - `"container": true`: a **window**. `ui/container_window.gd` opens centred, with the character screen (`ui/character_screen.gd`) beside it. `title` is top-left, `text` is the description under it (the left column, about 40 % of the window, no scroll bar: the font shrinks to fit), the rest is a `cols` x `rows` grid (1–8 each) of the `items`, filled in order (an item may pin a cell with `"slot": n`, 0-based). There is no Back: EXIT / Esc closes it.
-- Item: `id` (inventory id; Take sets the flag `has_<id>`, which `require` and the lantern light check), `label` (cell name, description, button `Take LABEL (1 hr)`), `hours` (shown on the button and really spent from the 8 hour blocks; refused with a short message when too few are left. Blocks are live once a screen runs `arm_hours`, as the ready room does), `required`, `detail` (description + hover tip), `actions` (default `["take"]`). `take` is the only built-in action. Others (`use`, `inspect`, or any name) get a button `Use LABEL` and emit `action_requested` on the container window, so they can be handled later without changing the data.
+- Item: `id` (inventory id; Take sets the flag `has_<id>`, which `require` and the lantern light check), `label` (cell name, description, button `Take LABEL`), `hours` (0 in the ready room: taking is free; if set, shown on the button and really spent from the 8 hour blocks; refused with a short message when too few are left. Blocks are live once a screen runs `arm_hours`, as the ready room does), `required`, `detail` (description + hover tip), `actions` (default `["take"]`). `take` is the only built-in action. Others (`use`, `inspect`, or any name) get a button `Use LABEL` and emit `action_requested` on the container window, so they can be handled later without changing the data.
+- Description paragraphs (lines) always show with one empty line between them.
+- Drag and drop: drag an item from the container onto the character screen to take it, or from the character screen into the container to put it in (it stays there: `vars.container_items.<act>`; a full grid says NO ROOM). Drag it out of all windows and the windows hide while the item stays on the cursor: let go over the room or map = drop it on the floor; over a lock = use it (the right keycard unlocks, anything else says "That doesn't work."); over a room box (LOCKER, COFFEE POT, WINDOW) = "Nothing happens."; back over a window, Esc or right click = it returns. Chapters can override `_use_item_hook(target, item_id)` for puzzles (targets `door:a|b`, `marker:<id>`).
 - An old container written with `choices` instead of `items` still loads (one item per choice). Without a window (the Scene Writer preview) a container reads as the function form.
-- `"marker": {"room", "label", "rect": [x, y, w, h]}` on an act adds a green labelled rectangle to that room on the minimap and full map (rect = fractions of the room's bounding box). Clicking it opens the same window as the green word. Drop-item boxes use the bottom row of the room, so keep markers in the top 70 %.
-- `"station": "coffee"` (instead of `container`) is a **station**: a window of the same hologram style with a picture and code-defined options (`ui/station_window.gd`; the coffee pot is in `templates/pda_screen.gd`: `coffee_provider()` / `coffee_option()`). The Scene Writer shows it as an act it cannot edit; leave it alone. State: `vars.coffee = {pot, brews, drinks, disabled}`; `coffee_set_disabled(true)` removes the options ("MACHINE DISABLED") for a later pass.
+- `"marker": {"room", "label", "rect": [x, y, w, h]}` on an act adds a green labelled rectangle to that room on the minimap and full map (rect = fractions of the room's bounding box). Clicking it opens the same window as the green word. Dropped items are drawn as a dot with the name beside it (rows at about 27 %, 40 % and 78 % of the room height), so keep boxes in the top 22 %.
+- `"station": "coffee"` (instead of `container`) is a **station**: a window of the same hologram style with a picture and code-defined options (`ui/station_window.gd`; the coffee pot is in `templates/pda_screen.gd`: `coffee_provider()` / `coffee_option()`). The Scene Writer shows it as an act it cannot edit; leave it alone. The coffee pot: "Brew coffee (1 hr)" once (fade out and back), then the player has a THERMOS OF COFFEE and the pot says "The pot is empty.". Drinking the thermos (character screen, Drink) makes the next action that takes time 1 hr cheaper (`vars.free_hours`). State: `vars.coffee = {brews, brewed, disabled, ...}`; `coffee_set_disabled(true)` removes the options ("MACHINE DISABLED") for a later pass.
 - A `hold` ending with `"exit": "door:ready_room|airlock"` has no CONTINUE: the scene is left by clicking that door on the map once it is open (no suit worn = a Yes / No warning first, `flags.went_without_suit`). `goto` is where it leads (`order:next`).
-- A screen with `"tutorial": "items"` runs the inventory walkthrough the first time its text finishes (`TUTORIALS` in `templates/authored_scene.gd`; flag `tut_items_done`).
-- Items, the character screen and the map: the character screen offers **Drop** for every item (free; the item sits on the room floor, shown as a green box on the map, state `vars.dropped`) and **Put on** for the suit (1 hr, fade + zipper, `vars.suit_worn`, the suit leaves the inventory, the figure turns green). Locked doors in `data/vessel.gd` take `key` (item id), `key_name` (shown as "Requires <key_name>"), `behind` (room named when opened) and `fail: "restrict"` (the RESTRICTED stamp appears when the lock is tried without the card). Opened doors are kept in `flags.door_open_<a>_<b>`.
-- Hotkeys: TAB, C or I show / hide the character screen in the game UI (the INV tab does the same). Esc closes the topmost window. Nothing on screen tells the player this.
+- Items, the character screen and the map: the character screen offers **Drop** for every item (free; the item sits on the room floor, shown as a dot + name on the map, state `vars.dropped`) and **Put on** for the suit (free, fade + zipper, `vars.suit_worn`, the suit leaves the inventory, the figure turns green). Locked doors in `data/vessel.gd` take `key` (item id), `key_name` (shown as "Requires <key_name>"), `behind` (room named when opened) and `fail: "restrict"` (the RESTRICTED stamp appears when the lock is clicked). Clicking a lock never unlocks it: the keycard has to be dragged onto it. Opened doors are kept in `flags.door_open_<a>_<b>`.
+- Round 4: containers have **no Take button** (drag and drop only) and a fixed-size, fixed-font description (scrolls if long). While an inventory item is dragged out over the room the cursor label reads `DROP <ITEM>` (over a lock / room box `USE <ITEM>`). Whenever the map is added to (an item dropped, a door unlocked, a room revealed) the windows close and the full map opens (`show_map_change()`); searching a container does not. Sounds (assets/sounds): loot = `UI-3.mp3`, drop (floor or container) = `UI-5.mp3`, unlock = `unlock.wav` latch + `dooropen.mp3`. Items THERMOS OF COFFEE, SUIT, LANTERN and keycards have code-drawn icons (`ui/item_icons.gd`).
+- The **LOG** is a hologram pop-up (`ui/log_window.gd`, opened by the LOG tab and by `log` acts such as RSV ABEYANCE, which select their entry): categories on the left (SHIP, COMPANY, TUTORIALS, any other `category` an act's `log` names), the entry on the right, a "Search Log" bar that filters by title and text, EXIT / Esc. REC-7 Corporation (COMPANY) is listed from the start; a TUTORIALS entry (Map, Containers, Items, Doors, Time, Moving Rooms) appears once its tip has been seen. Tips that run once each: log (first LOG), drag (first container window), drop (right after the first item dropped on the floor), time (first time prompt).
+- Round 5, the game tab rail: **STA, INV, LOG, MAP** (top to bottom). STA is the main state: the room text with nothing else up (selecting it closes every window and the full map). INV = character screen, LOG = the LOG pop-up, MAP = the full map. The open screen's tab is lit. TAB (or E) goes down the rail and wraps, Shift+Tab (or Q) goes up; I or C = inventory (beside a container they only toggle the character screen); M = map; Esc closes the top window. Nothing on screen names these keys except the time tutorial's third tip ("TIP: Cycle through your TRM-CUFF by clicking this menu or hitting TAB.", also the TRM-CUFF log entry).
+- Sticky drag: an inventory item dragged out of the windows closes them and sticks to the cursor; letting go does nothing, the next CLICK drops it (room / map) or uses it (a lock or target). Esc / right click returns it. Drags between the container and inventory grids are normal drag and drop.
 
 After a hand edit, open the scene in the Scene Writer and press **Build** (or just run it — the built
 `.tscn` reads the JSON every time, so text changes show up without rebuilding).
@@ -362,3 +379,23 @@ For programmers: `ui/story_markup.gd` (parser/timing), `ui/story_stage.gd` (play
 `ui/story_scene.gd` (load/validate/save), `templates/authored_scene.gd` (runner),
 `ui/map_tour.gd` (map walkthrough), `addons/scene_writer/` (plugin).
 Tests: `godot --headless --audio-driver Dummy --script res://tools/writer_test.gd` (and `tools/excursion_test.gd`).
+
+## Round 6 notes
+- **Room screens.** A hold screen whose `on_enter` has `map_set_room:<room>` is that room's screen: moving there on the map (click-to-move, `map_moves:on`) opens it, in the same scene, so all state stays. A room left only by walking uses `"end": {"type": "hold", "exit": "room:<back room>"}` (no CONTINUE). Example: `stasis` in the ready room scenes.
+- **Containers with a `search` cost** are paid once: flag `searched_<act>` makes later openings free with no prompt.
+- **Leaving through the exit door** fades to black, then follows the end's `goto` (READY ROOM → `scene:airlock/airlock`, the placeholder AIR LOCK scene, chapter EXCURSION 1 in SCENE_ORDER.md).
+- Unlocking a room stamps its name in on the map (like RESTRICTED). The full map's button is EXIT, bottom right. The character screen has an EXIT button bottom right (the X stays).
+- The first drop's tips: tip 1 over the normal screen; the map maximizes only on the last tip.
+
+## Round 7 notes
+
+- Room screens (end `hold` + `map_set_room:`) show no scene title; the heading is the room name.
+- ROOM TRANSITION: entering a room screen (map move or tour arrival) fades out/in with `dooropen.mp3`; the text types after. The airlock exit uses `airlockdoor.mp3`.
+- Dynamic menu: `vars.rail_tabs` holds the revealed buttons (persisted across scenes). A brief screen with `"onboarding": true` starts with STA only and runs the STATUS → MAP → MENU tips. Dev starts default to STA+MAP (+INV in the airlock or after the locker search).
+- Map markers whose act has an unpaid search get an orange border (`cost`).
+- All tips are filed in the LOG under TUTORIALS.
+
+## Round 8 notes
+
+- The map schematic (full map + minimap) uses the original dark map background and colours; only the full map's window frame is holo green with the flicker (FX sits behind the content).
+- The first LOG tutorial (e.g. via the RSV ABEYANCE link) reveals the LOG button (animated, saved in `vars.rail_tabs`).

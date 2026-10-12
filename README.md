@@ -162,10 +162,10 @@ Ops: `map_explore:id`, `map_set_room:id`, `map_lock_room:id`, `map_unlock_room:i
 dark room with a dim label), `map_know_door:a|b` (door drawn before either side is explored),
 `map_moves:on|off` (click-to-move), `map_restrict_room:id` / `map_unrestrict_room:id` (RESTRICTED:
 dark room, red outline + a RESTRICTED stamp that pops in (scale + fade + red flash) on every map view;
-the legend gains RESTRICTED), `o2_full`. Passages may set `"map_room": "stasis_15"`.
-Rooms: STASIS-15 (start, explored), **READY ROOM** (the big room above STASIS-15; the mockup called it
+the legend gains RESTRICTED), `o2_full`. Passages may set `"map_room": "stasis_3"`.
+Rooms: STASIS-3 (start, explored), **READY ROOM** (the big room above STASIS-3; the mockup called it
 COMMISSARY), **AIRLOCK** (the grey L on the left; was PORT ACCESS, then briefly READY ROOM), STBD HOLD,
-AFT PORT, AFT STBD. Doors: STASIS-15 | READY ROOM open (one click), READY ROOM | AIRLOCK **locked**,
+AFT PORT, AFT STBD. Doors: STASIS-3 | READY ROOM open (one click), READY ROOM | AIRLOCK **locked**,
 READY ROOM | STBD HOLD **locked** (both padlocked as in the mockup: KEYCARD REQUIRED).
 **Click-to-move** (`vessel_map.click_to_move`, set by `map_moves:on`): clicking a room on the full map
 moves you there if it is next to your room through an OPEN door (explored, dot moves, quiet door
@@ -177,7 +177,7 @@ The ship state (`vessel_map`) now carries across scene changes with flags / vars
 Minimap sits under ACTIONS (collapses when many choices need the column); full map is a modal (M / Esc).
 Extra read-only views: `ShipMapView.interactive = false` (mouse ignored) + `register_map_view(view)`
 so they refresh with the ship state. The intro overlay shows one bottom-right (RSV ABEYANCE,
-STASIS-15 current) during THAW / EXAM; the NO4 door lock / recovery unlock is visible on it.
+STASIS-3 current) during THAW / EXAM; the NO4 door lock / recovery unlock is visible on it.
 
 ## Memory Examination (after the THAW reply)
 Script + measured cue times: `data/memory_exam.gd` (`MemoryExam`, editable `[start, "text", end]` lists,
@@ -191,7 +191,7 @@ THAW reply (pinned `> YES|NO`) → CONTINUE, then:
 3. Pinned `1) Do you remember your name?` / `> <typed name>` — the name scrambles into ERROR when the
    VO reaches "The name ERROR" — then "The name ERROR is not the name we have on file… Please
    indicate that you understand." + YES/NO.
-NO1 → NO2 → NO3 (each a new pinned screen, YES/NO again after each) → NO4: STASIS-15 door locks,
+NO1 → NO2 → NO3 (each a new pinned screen, YES/NO again after each) → NO4: STASIS-3 door locks,
 red vignette creeps in from the edges with the NO4 VO (`RED_NO4_START..RED_NO4_END`), then the O2
 countdown (`MemoryExam.O2_SECONDS` = 10 s; red keeps intensifying to `RED_O2_END`). The only response
 is NO WAIT, I UNDERSTAND, built exactly like the YES/NO buttons and sitting in the YES slot of the
@@ -258,16 +258,30 @@ A Scene Writer scene: `story/scenes/excursion1_prep.json` → `scenes/authored/e
    the fade-in to finish. Its `on_enter` makes the READY ROOM + AIRLOCK names and the two side doors known.
 2. **map** — ending `map_tour`: the full map opens (locked open) and the 7 tips play one at a time
    (`ui/map_tour.gd`): everything but the target dimmed, a pulsing amber bracket + outline around it, the
-   tip in a small panel beside it (`TIP n/7`, CONTINUE 220x38). Targets: whole map + you dot, STASIS-15,
-   STBD HOLD (dark), READY ROOM (dark + named), the STASIS-15 | READY ROOM door, the locked READY ROOM |
+   tip in a small panel beside it (`TIP n/7`, CONTINUE 220x38). Targets: whole map + you dot, STASIS-3,
+   STBD HOLD (dark), READY ROOM (dark + named), the STASIS-3 | READY ROOM door, the locked READY ROOM |
    STBD HOLD door, all rooms. Tutorial, so no pinned response. After tip 7 the dim goes, click-to-move
    turns on and the info line reads PLEASE PROCEED TO THE READY ROOM.; one click on the READY ROOM moves
    the player (refusals as above). Reaching it explores it (green) and moves the dot; 0.6 s later the
    walkthrough's `on_arrive` op `map_restrict_room:stbd_hold` pops RESTRICTED over STBD HOLD (door stays
    locked); the map closes 2.4 s after arriving.
 3. **ready_room** — heading READY ROOM + a `TODO:` placeholder, ending `hold` (the chapter stops).
+   Now (round 3): the room text names WINDOW, LOCKERS and COFFEE POT (green, body font, no exposition
+   font); WINDOW opens a sub-screen whose RSV ABEYANCE link files a ship LOG entry; LOCKERS asks
+   "Searching the locker will take 1 hr. Are you sure?" (Yes = 1 hr + fade, every search) with a 2-step
+   time tip the first time; taking items and putting on the suit are free; the coffee pot brews once
+   (1 hr) into a THERMOS OF COFFEE (Drink = next timed action 1 hr cheaper); items drag between the
+   windows, out onto the map (dropped = a dot + name) and onto locks (the keycard has to be dragged onto
+   the lock; clicking a lock only explains it). The game HUD has no menu button (Esc = pause); the O2
+   and HRS bars are the same length. See docs/SCENE_WRITER.md section 7.
+   Round 4: the WINDOW text is in the present tense; the LOG is a hologram pop-up with categories,
+   search and a 3-step first-time tip; containers are drag-only (no Take); drag / drop tips run once
+   with small animations; dropping, unlocking or revealing opens the full map (windows stay closed);
+   loot / drop / unlock sounds come from assets/sounds; THERMOS, SUIT, LANTERN, keycards have art.
+   Round 5: the rail is STA / INV / LOG / MAP (STA = the room text, TAB cycles down); items dragged
+   out of the inventory stick to the cursor and act on the next click.
    Its `on_enter` repeats `map_restrict_room:stbd_hold` (no second pop; keeps `--screen=ready_room`
-   jumps right). Afterwards the map: STBD HOLD → RESTRICTED, AIRLOCK → KEYCARD REQUIRED, STASIS-15 open.
+   jumps right). Afterwards the map: STBD HOLD → RESTRICTED, AIRLOCK → KEYCARD REQUIRED, STASIS-3 open.
    **Next-chapter hook**: set the scene's "When it ends" (`"after"`) or the hold ending's target and the
    holding screen shows CONTINUE.
 Map moves stay on for the rest of the chapter (the minimap opens the full map; Close works again).
@@ -315,3 +329,7 @@ output folder for the next build.
   `tools/title_test.gd` title screen test, `tools/mission_test.gd` mission select test (all headless).
 - `assets/rec7_logo.png` REC-7 logo (title screen).
 - `assets/fonts` IBM Plex Sans/Mono, Oxanium (+ OFL licenses). `assets/sounds` UI-1..7, shipwelcome*, memorytest*.
+
+Round 6: STASIS-3 walkable from the ready room (placeholder room), locker search paid once, EXIT on inventory and full map (bottom right), AIR LOCK name stamp-in on unlock, placeholder AIR LOCK scene (EXCURSION 1) reached by the airlock door with a fade, drop tips open the map only on the last tip, WINDOW marker on the full map returns to the room text.
+
+Round 7: room screens drop the scene title; every room move is a ROOM TRANSITION (fade + door sound, text types fresh; airlockdoor sound for the airlock); dynamic menu (rail starts STA only in EXCURSION 1 // PREP, MAP/minimap revealed by onboarding, INV earned on the first locker opening, LOG hidden; TAB/hotkeys only reach revealed buttons); onboarding tips STATUS → MAP (click minimap → map tour) → MENU; inventory tutorial (Inventory → Character → EXIT, no X); locker: orange marker until searched, search spends the hour then time tips, click again to open; holo FX + window-green maps; room labels run along the shared door edge (west −90°, east +90°), RESTRICTED stamp too.

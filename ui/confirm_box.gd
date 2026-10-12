@@ -91,3 +91,38 @@ func answer(yes: bool) -> void:
 	answered.emit(yes)
 	if cb.is_valid():
 		cb.call()
+
+
+## Screen rectangle of `sub` inside the text (e.g. "1 hr"): the tutorial highlights it. The text is
+## set in a monospace font, so the wrapping is replayed here: greedy word wrap at the label width.
+func highlight_rect(sub: String) -> Rect2:
+	var text := text_label.text
+	var at := text.find(sub)
+	if at < 0 or not is_inside_tree():
+		return Rect2()
+	var font: Font = text_label.get_theme_font("font")
+	var fs := text_label.get_theme_font_size("font_size")
+	var width := maxf(text_label.size.x, PANEL_W - 32.0)
+	var lines: Array = []
+	var cur := ""
+	for w in text.split(" "):
+		var trial: String = w if cur == "" else cur + " " + w
+		if cur != "" and font.get_string_size(trial, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > width:
+			lines.append(cur)
+			cur = w
+		else:
+			cur = trial
+	lines.append(cur)
+	var ln := 0
+	var offset := 0
+	var before := ""
+	for k in lines.size():
+		var l: String = lines[k]
+		if at < offset + l.length() + 1:
+			ln = k
+			before = l.substr(0, maxi(0, at - offset))
+			break
+		offset += l.length() + 1
+	var x := font.get_string_size(before, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var w3 := font.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	return Rect2(text_label.global_position + Vector2(x, float(ln) * font.get_height(fs)), Vector2(w3, font.get_height(fs)))

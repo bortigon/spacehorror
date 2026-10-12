@@ -119,6 +119,7 @@ func _build_overlay() -> void:
 	stage.action_taken.connect(_on_action)
 	stage.act_is_done = _act_already_done
 	stage.container_handler = _open_container
+	stage.act_opened.connect(_on_act_opened)
 	if game_ui:
 		_embed_stage()
 	elif bool(scene.get("show_hud", true)):
@@ -194,6 +195,13 @@ func _begin() -> void:
 		return
 	var d := _read_debug_args()
 	_dbg = d
+	if game_ui and not vars.has("rail_tabs"):
+		# started straight here (debug mission select): sensible buttons. The onboarding screen of
+		# EXCURSION 1 // PREP replaces this with STA only when it runs.
+		var tabs := ["sta", "map"]
+		if str(scene.get("id", "")) == "airlock" or has_flag("searched_locker"):
+			tabs.insert(1, "inv")
+		vars["rail_tabs"] = tabs
 	# Mission select sets this carry flag to open the map walkthrough already finished:
 	# tour overlay gone, map open, waiting for the move_to click. Consumed here.
 	var tour_move := has_flag("dev_tour_move")
@@ -299,14 +307,58 @@ func enter_screen(i: int, pin_q := "", pin_r := "") -> void:
 	var hold_target := _order_target(str(end.get("goto", "")) if str(end.get("goto", "")) != "" else str(scene.get("after", "")))
 	if str(end.get("exit", "")) != "":
 		hold_target = ""   # the way out is the door on the map, not a CONTINUE button
-	stage.play(scr, {"speed": scene.get("speed", 40), "title": scene.get("title", ""),
+	if bool(scr.get("onboarding", false)) and onboarding_active():
+		set_rail_tabs(["sta"])        # EXCURSION 1 // PREP: the menu starts with STA only, no minimap
+	stage.play(scr, {"speed": scene.get("speed", 40), "title": "" if is_room_screen(i) else scene.get("title", ""),
 		"pin_q": pin_q, "pin_r": pin_r, "hold_next": hold_target != ""})
 	_refresh_maps()   # the screen's markers (LOCKER, COFFEE POT) and clickable door
+	set_title("" if is_room_screen(i) else str(scene.get("title", "")))   # A) no scene title over a room
 	if str(end.get("type", "")) == "map_tour" and str(scr.get("text", "")).strip_edges() == "" \
 			and str(scr.get("heading", "")).strip_edges() == "":
 		stage.skip_typing(true)   # nothing to type: the walkthrough opens straight away
 	refresh(0.6)
 	_flush_after()
+
+
+## A room screen (READY ROOM, STASIS-3, AIR LOCK: a hold whose on_enter puts the player in a room)
+## shows only its heading, not the scene title above it (no "NEW SCENE" over READY ROOM).
+func is_room_screen(i: int) -> bool:
+	if i < 0 or i >= screens.size():
+		return false
+	var scr: Dictionary = screens[i]
+	if str((scr.get("end", {}) as Dictionary).get("type", "")) != "hold":
+		return false
+	for op: Variant in scr.get("on_enter", []):
+		if str(op).begins_with("map_set_room:"):
+			return true
+	return false
+
+
+# ---------------------------------------------------------------- ROOM TRANSITION
+## Every room change (the walkthrough's first walk into the READY ROOM, READY ROOM <-> STASIS-3, out
+## through the air lock): fade to black with ROOM_TRANSITION_SFX, the new room is set up while it is
+## dark, then it fades back in and the room text starts TYPING fresh (held until the fade is gone).
+const ROOM_TRANSITION_SFX := "res://assets/sounds/dooropen.mp3"
+const AIRLOCK_TRANSITION_SFX := "res://assets/sounds/airlockdoor.mp3"
+var room_transitions := 0     # how many ran (tests)
+
+
+func room_transition(mid: Callable, sfx := ROOM_TRANSITION_SFX) -> void:
+	room_transitions += 1
+	if map_overlay.visible and not map_locked_open:
+		map_overlay.hide()
+	fade_through(_transition_dark.bind(mid), sfx, -4.0, _transition_done)
+
+
+func _transition_dark(mid: Callable) -> void:
+	mid.call()
+	if stage != null:
+		stage.frozen = true      # typing waits for the fade-in
+
+
+func _transition_done() -> void:
+	if stage != null and not _dbg.has("freeze"):
+		stage.frozen = false
 
 
 func screen_label(i: int) -> String:
@@ -316,7 +368,7 @@ func screen_label(i: int) -> String:
 ## Stage mode: the story stage over the PDA background. Game mode: the main UI around it.
 func _show_frame() -> void:
 	safe_area.visible = game_ui
-	journal_button.visible = game_ui
+	journal_button.visible = false      # the little menu button is gone from the game HUD (Esc = pause menu)
 	if game_ui:
 		set_excursion_chrome(true)
 		stage.act_hours_live = time_blocks_live
@@ -418,6 +470,23 @@ func go(target: String, pin_q := "", pin_r := "") -> void:
 	go_target(t)
 
 
+## An act with a "log" key (RSV ABEYANCE) files its text as a LOG entry once discovered. In the game
+## UI it opens the LOG pop-up on that entry instead of replacing the story text (_open_container);
+## elsewhere (no windows) it still reads as a function with Back.
+func _on_act_opened(_act_id: String, spec: Dictionary) -> void:
+	_file_act_log(_act_id, spec)
+
+
+func _file_act_log(act_id: String, spec: Dictionary) -> String:
+	var lg: Variant = spec.get("log", null)
+	if not (lg is Dictionary):
+		return ""
+	var eid := str((lg as Dictionary).get("id", act_id))
+	file_log_entry(eid, str((lg as Dictionary).get("title", eid.to_upper())), str(spec.get("text", "")),
+		str((lg as Dictionary).get("filed", "SHIP LOG")), str((lg as Dictionary).get("category", "SHIP")))
+	return eid
+
+
 func _on_action(_act_id: String, action: Dictionary) -> void:
 	var hrs := int(action.get("hours", 0))
 	var why := hours_refusal(hrs)
@@ -439,18 +508,68 @@ func _on_action(_act_id: String, action: Dictionary) -> void:
 
 
 ## A container act ("container": true) opens the window pair: character screen + this container.
+## A container with "search": {"hours": 1, "text": "..."} asks first (Yes / No); Yes spends the hours,
+## fades out and back, and opens the window. Every opening is a new search and costs the hours again.
 ## A station act ("station": "coffee") opens its own window (the coffee pot).
 func _open_container(act_id: String, spec: Dictionary) -> void:
 	_ensure_windows()
+	if spec.has("log") and not bool(spec.get("container", false)):
+		open_log(_file_act_log(act_id, spec))     # RSV ABEYANCE: the LOG pop-up on that entry
+		return
 	if spec.has("station"):
 		open_station(act_id, spec)
 		return
+	if _suit_busy or (confirm_box != null and confirm_box.visible):
+		return
+	var search: Variant = spec.get("search", null)
+	if search is Dictionary and int((search as Dictionary).get("hours", 0)) > 0:
+		_ask_search(act_id, spec, search as Dictionary)
+		return
+	_show_container(act_id, spec)
+
+
+func _show_container(act_id: String, spec: Dictionary) -> void:
 	windows.taken_check = _container_item_in_inventory
+	var sp := spec.duplicate(true)
+	var extras := container_extras(act_id)      # what the player put in earlier
+	if not extras.is_empty():
+		var list: Array = sp.get("items", [])
+		list.append_array(extras)
+		sp["items"] = list
 	play_sfx(&"tap")
-	windows.open_container(act_id, spec)
+	windows.open_container(act_id, sp)
+	if not tab_revealed("inv"):
+		reveal_tab("inv")         # the first locker opening earns the INV button (turns on like a hologram)
+	maybe_start_tutorial("drag")      # the first container window: how to take things (then the inventory tips)
+
+
+## A container is paid for ONCE: after the first search (flag searched_<act>) it opens for free.
+func _ask_search(act_id: String, spec: Dictionary, search: Dictionary) -> void:
+	if has_flag("searched_" + act_id):
+		_show_container(act_id, spec)
+		return
+	var hrs := int(search.get("hours", 1))
+	var text := str(search.get("text", "Searching will take %s. Are you sure?" % PdaScreen.hours_label(hrs)))
+	ask_confirm(text, _search_yes.bind(act_id, spec, hrs))     # no tip before answering (it interrupted)
+
+
+func _search_yes(act_id: String, spec: Dictionary, hrs: int) -> void:
+	var why := hours_refusal(hrs)
+	if why != "":
+		os_toast(why)     # not enough hours: nothing happens
+		play_sfx(&"close")
+		return
+	spend_hours(hrs)
+	flags["searched_" + act_id] = true    # paid once: later openings are free, no prompt
+	stage.act_hours_live = time_blocks_live
+	# the search takes the hour (fade), the LOCKER marker loses its orange border, and THEN the time
+	# tips explain what was spent. Nothing opens: the player clicks the (searched, free) locker again.
+	fade_through(_refresh_maps, "", -4.0, func() -> void: maybe_start_tutorial("time"))
 
 
 func _container_item_in_inventory(_act_id: String, item: Dictionary) -> bool:
+	if bool(item.get("extra", false)):
+		return false      # put in by the player: it is in the container now
 	return item_ever_taken(str(item.get("id", "")).strip_edges())
 
 
@@ -460,6 +579,8 @@ func _on_container_item_taken(act_id: String, item: Dictionary) -> void:
 	if act_id == FLOOR_ACT:
 		super(act_id, item)
 		return
+	if bool(item.get("extra", false)):
+		_forget_extra(act_id, str(item.get("id", "")))
 	_on_action(act_id, {"label": str(item.get("label", "")), "hours": int(item.get("hours", 0)),
 		"item": str(item.get("id", "")), "detail": str(item.get("detail", "")),
 		"required": bool(item.get("required", false))})
@@ -484,14 +605,19 @@ func _scene_map_markers() -> Array:
 		if not (spec.get("marker", null) is Dictionary):
 			continue
 		var m: Dictionary = spec["marker"]
-		out.append({"id": str(aid), "kind": "act", "room": str(m.get("room", "ready_room")),
+		var search: Variant = spec.get("search", null)
+		var costs := search is Dictionary and int((search as Dictionary).get("hours", 0)) > 0 \
+			and not has_flag("searched_" + str(aid))
+		out.append({"id": str(aid), "kind": "act", "room": str(m.get("room", "ready_room")), "cost": costs,
 			"label": str(m.get("label", spec.get("title", aid))), "rect": m.get("rect", [0.03, 0.05, 0.25, 0.17])})
 	return out
 
 
 func _on_map_station_clicked(id: String) -> void:
-	if stage != null and stage.is_container(id):
-		stage.open_act(id)
+	if map_overlay.visible and not map_locked_open:
+		close_map()      # clicked on the full map: back to the room text (STA) first, then the act opens
+	if stage != null:
+		stage.open_act_root(id)
 
 
 ## "end": {"type": "hold", "exit": "door:ready_room|airlock"}: the scene is left through that door.
@@ -534,14 +660,23 @@ func _exit_without_suit() -> void:
 	_leave_through_exit()
 
 
+## Leaving through the exit door: a fade to black, then the next scene (it fades in itself).
 func _leave_through_exit() -> void:
 	var end: Dictionary = current_screen().get("end", {})
 	if map_overlay.visible and not map_locked_open:
 		close_map()
-	go(str(end.get("goto", "")) if str(end.get("goto", "")) != "" else str(scene.get("after", "")))
+	leaving = true
+	room_transitions += 1        # a ROOM TRANSITION into the next scene (it fades itself back in, typing after)
+	fade_through(go.bind(str(end.get("goto", "")) if str(end.get("goto", "")) != "" else str(scene.get("after", ""))),
+		AIRLOCK_TRANSITION_SFX)
+
+
+var leaving := false     # the exit door was taken (the fade is running / the next scene loads)
 
 
 func _on_continue() -> void:
+	if onboarding_blocks():
+		return      # the onboarding tips run first: no CONTINUE until they are done
 	var end: Dictionary = current_screen().get("end", {})
 	play_sfx(&"tap")
 	var need := str(end.get("require", "")).strip_edges()
@@ -592,7 +727,11 @@ func _on_qte_expired() -> void:
 
 
 func _on_typing_done() -> void:
-	_maybe_start_tutorial()
+	if bool(current_screen().get("onboarding", false)) and onboarding_active() and not has_flag("tut_status_done"):
+		onboard_phase = "status"
+		stage.continue_button.hide()
+		maybe_start_tutorial("status")
+		return
 	if stage.end_type() == "death":
 		_death_beat = DEATH_BEAT
 	elif stage.end_type() == "map_tour":
@@ -604,38 +743,100 @@ func _on_typing_done() -> void:
 			_tour_show(int(p) if p != null else 0)
 
 
-# ---------------------------------------------------------------- inventory walkthrough (tutorial)
-## A screen with "tutorial": "items" runs this guided walkthrough the first time its text has been
-## read (flag tut_items_done). Same mechanism and look as the map walkthrough (ui/map_tour.gd ->
-## ui/guide_tour.gd): one tip at a time, dim + bracket on what it explains, a CONTINUE button.
-## It is self-contained: it opens the locker window itself to show the grid and the buttons, and
-## closes everything when it ends. No hotkeys are mentioned (the game shows none).
+# ---------------------------------------------------------------- time tutorial
+## The first time the player is asked to spend time (the locker search prompt) a 2-step walkthrough
+## runs BEFORE they can answer: "TIP: Some actions require Time." on the "1 hr" in the prompt, then
+## "Missions are limited to 8 Hours." on the time bar. After the second step it stops and the player
+## chooses Yes or No. It runs once (flag tut_time_done). Same mechanism and look as the map
+## walkthrough (ui/map_tour.gd -> ui/guide_tour.gd). Tutorials are exempt from the no-hints rule;
+## no hotkeys are named.
+##
+## Other walkthroughs, each once (flag tut_<id>_done), each also filed in the LOG under TUTORIALS:
+##   log   the first LOG pop-up: the list, the search bar, the exit button.
+##   drag  the first container window: a ghost item slides from the container grid to the inventory.
+##   drop  the first item dropped on the floor (shown right AFTER that drop, over the opened map):
+##         a ghost item slides out of the inventory onto the screen, then the new dot on the map.
 const TUTORIALS := {
-	"items": [
-		{"target": "story", "text": "Words in GREEN are things you can use. Click one to look closer. The LOCKER and the COFFEE POT are two."},
-		{"target": "markers", "text": "They are marked on the map too. Click LOCKER or COFFEE POT there to use them from the map."},
-		{"target": "container", "open": "container", "text": "A locker shows what is inside. Select an item to read about it."},
-		{"target": "container_actions", "text": "TAKE moves it to your character sheet. The cost in hours is on the button."},
-		{"target": "time", "text": "Everything you do costs hours. Taking an item, putting on the suit, brewing and drinking coffee: 1 hr each. You have 8. They do not come back."},
-		{"target": "character", "text": "This is your character sheet. What you carry shows here. Select an item to see what you can do with it."},
-		{"target": "character", "text": "The SUIT must be put on to be worn. Select it, then Put on (1 hr). Your figure turns green once it is on."},
-		{"target": "character", "text": "Any item can be dropped, for free. It stays on the floor of the room as a green box on the map. Click the box to pick it up again."},
-		{"target": "lock", "close": true, "text": "Orange padlocks on the map are locked doors. Click one to try it. A keycard opens its door."},
+	"time": [
+		{"target": "time_spent", "text": "TIP: Some actions require Time."},
+		{"target": "time", "text": "Missions are limited to 8 Hours."},
+	],
+	# EXCURSION 1 // PREP onboarding (screen "onboarding": true): STATUS -> MAP (click the minimap) ->
+	# the map walkthrough in the full map -> MENU (the MAP button) -> the walk to the READY ROOM.
+	"status": [
+		{"target": "sta", "text": "TIP: This is your STATUS screen. It shows details about your current situation."},
+	],
+	"map_click": [
+		{"target": "minimap", "click": true, "text": "TIP: This is your MAP. Click on it to zoom in."},
+	],
+	"menu": [
+		{"target": "map_button", "text": "TIP: You can also find the map here, in your MENU. Click or TAB to cycle through your MENU."},
+	],
+	"inventory": [
+		{"target": "inv_grid", "text": "TIP: This is your Inventory. Items you are holding will be shown here."},
+		{"target": "inv_figure", "text": "TIP: This is your Character."},
+		{"target": "inv_exit", "text": "TIP: Click EXIT to close."},
+	],
+	"log": [
+		{"target": "log_list", "text": "TIP: This is your LOG. Important information will be stored here."},
+		{"target": "log_search", "text": "TIP: The log is searchable."},
+		{"target": "log_exit", "text": "TIP: Click here to exit the log."},
+	],
+	"drag": [
+		{"target": "container_grid", "anim": "container_to_inventory",
+			"text": "TIP: Take an item from any CONTAINER by dragging and dropping it into your inventory."},
+	],
+	"drop": [
+		{"target": "", "anim": "inventory_to_screen",
+			"text": "TIP: Inventory is limited. Sometimes you may need to DROP items. Drag the item off the inventory, then click to drop it."},
+		{"target": "map_drop", "open_map": true, "text": "TIP: The item now appears on the map."},
 	],
 }
+
+
+# ---- onboarding state
+var onboard_phase := ""     # "" | "status" | "map_click" | "tour" | "menu"
+
+
+func onboarding_active() -> bool:
+	return PdaScreen.tutorials_enabled and game_ui and not has_flag("tut_onboard_done") and not _dbg.has("no_tutorial")
+
+
+## While the onboarding runs on its screen the story CONTINUE is held back.
+func onboarding_blocks() -> bool:
+	return onboard_phase != "" or (bool(current_screen().get("onboarding", false)) and onboarding_active())
+
+
+## The hour block the last time cost just dimmed (the time bar, global), for the time tip.
+func spent_block_rect() -> Rect2:
+	if time_bar == null:
+		return Rect2()
+	var i := 0
+	for c in time_bar.get_children():
+		if c is ColorRect:
+			if i == time_blocks:
+				return (c as ColorRect).get_global_rect().grow(2.0)
+			i += 1
+	return time_bar.get_global_rect()
 
 
 func guide_tips() -> Array:
 	return _guide_steps
 
 
-func _maybe_start_tutorial() -> void:
-	var tid := str(current_screen().get("tutorial", "")).strip_edges()
-	if tid == "" or not PdaScreen.tutorials_enabled or not game_ui or not TUTORIALS.has(tid):
-		return
-	if has_flag("tut_%s_done" % tid) or guide_phase != "" or _dbg.has("no_tutorial") or _dbg.has("open_window"):
-		return
+func drop_tip_pending() -> bool:
+	return PdaScreen.tutorials_enabled and game_ui and not has_flag("tut_drop_done") and not _dbg.has("no_tutorial") \
+		and guide_phase == ""
+
+
+## Starts the walkthrough `tid` if tutorials are on, this is the game UI and it has not run yet.
+func maybe_start_tutorial(tid: String) -> bool:
+	if not TUTORIALS.has(tid) or not PdaScreen.tutorials_enabled or not game_ui:
+		return false
+	if has_flag("tut_%s_done" % tid) or guide_phase != "" or _dbg.has("no_tutorial"):
+		return false
 	guide_start(tid, int(str(_dbg.get("tutorial_step", "1"))) - 1)
+	return true
 
 
 func guide_start(tid: String, first := 0) -> void:
@@ -648,7 +849,8 @@ func guide_start(tid: String, first := 0) -> void:
 		guide_tour = GuideTour.new()
 		(guide_tour as GuideTour).continued.connect(guide_next)
 		add_child(guide_tour)
-		move_child(guide_tour, pause_menu.get_index())   # over the windows, under the pause menu
+	move_child(guide_tour, get_child_count() - 1)    # over the prompt and the windows ...
+	move_child(pause_menu, get_child_count() - 1)    # ... under the pause menu
 	windows.set_animated(true)
 	_guide_show(clampi(first, 0, _guide_steps.size() - 1))
 
@@ -657,23 +859,14 @@ func _guide_show(n: int) -> void:
 	guide_phase = "tip"
 	guide_step = n
 	var st: Dictionary = _guide_steps[n]
-	if bool(st.get("close", false)):
-		windows.close_all(false)
-	var open := str(st.get("open", ""))
-	if open == "container" and not windows.container_open():
-		_open_container("locker", (current_screen().get("acts", {}) as Dictionary).get("locker", {}))
-		_guide_select_first()
-	elif open == "container":
-		_guide_select_first()
-	(guide_tour as GuideTour).show_step(n, _guide_steps.size(), str(st.get("text", "")), _guide_rect.bind(str(st.get("target", ""))))
-
-
-func _guide_select_first() -> void:
-	var c: Control = windows.container
-	for it: Dictionary in c.items:
-		if not bool(it.get("taken", false)):
-			c.select_id(str(it.get("id", "")))
-			return
+	if bool(st.get("open_map", false)):
+		show_map_change()     # the last drop tip: now the map maximizes to show the dot
+		move_child(guide_tour, get_child_count() - 1)
+		move_child(pause_menu, get_child_count() - 1)
+	var anim := str(st.get("anim", ""))
+	(guide_tour as GuideTour).click_only = bool(st.get("click", false))   # "click it" tips: no CONTINUE
+	(guide_tour as GuideTour).show_step(n, _guide_steps.size(), str(st.get("text", "")), _guide_rect.bind(str(st.get("target", ""))),
+		_guide_anim.bind(anim) if anim != "" else Callable())
 
 
 func guide_next() -> void:
@@ -690,42 +883,118 @@ func _guide_finish() -> void:
 	guide_phase = ""
 	if guide_tour:
 		guide_tour.hide()
-	windows.close_all(false)
 	flags["tut_%s_done" % guide_id] = true
+	match guide_id:
+		"status":
+			# the minimap and the MAP button turn on, then: click the map
+			reveal_tab("map")
+			onboard_phase = "map_click"
+			await get_tree().create_timer(REVEAL_TIME).timeout
+			if is_inside_tree() and onboard_phase == "map_click":
+				maybe_start_tutorial("map_click")
+		"map_click":
+			# zoom in: the map walkthrough (the existing tips) in the full map
+			onboard_phase = "tour"
+			var mi := -1
+			for k in screens.size():
+				if str(((screens[k] as Dictionary).get("end", {}) as Dictionary).get("type", "")) == "map_tour":
+					mi = k
+					break
+			if mi >= 0:
+				enter_screen(mi)
+			else:
+				open_map()
+		"menu":
+			# the onboarding is over: play goes on (the walk to the READY ROOM)
+			onboard_phase = ""
+			flags["tut_onboard_done"] = true
+			_tour_after_tips()
+		"drag":
+			# the inventory tips follow on the same screen when the character screen is up (not stacked)
+			if windows != null and windows.character_open():
+				maybe_start_tutorial("inventory")
 
 
 ## Global rectangle of what a tip explains (Rect2() = nothing to highlight; the tip is centred).
 func _guide_rect(target: String) -> Rect2:
 	match target:
-		"story":
-			return stage.get_global_rect() if stage != null else Rect2()
-		"markers":
-			var r := Rect2()
-			for id in ["locker", "coffee"]:
-				var m := _mini_map.marker_rect_local(id)
-				if m.size.x > 0.0:
-					m.position += _mini_map.global_position
-					r = m if r.size == Vector2.ZERO else r.merge(m)
-			return r
-		"container":
-			return (windows.container.grid_bg as Control).get_global_rect() if windows.container_open() else Rect2()
-		"container_actions":
-			if not windows.container_open():
-				return Rect2()
-			var row := windows.container.actions_row as Control
-			var er := (windows.container.exit_button as Control).get_global_rect()
-			var ar := row.get_global_rect()
-			return Rect2(ar.position, Vector2(er.end.x - ar.position.x, ar.size.y))
+		"time_spent":
+			return spent_block_rect()
+		"sta":
+			var r := sta_button.get_global_rect() if sta_button != null else Rect2()
+			return r.merge(stage.text_label.get_global_rect()) if stage != null and r.size != Vector2.ZERO else r
+		"minimap":
+			return mini_map_frame.get_global_rect() if mini_map_frame != null and mini_map_frame.is_visible_in_tree() else Rect2()
+		"map_button":
+			return map_button.get_global_rect() if map_button != null and map_button.is_visible_in_tree() else Rect2()
+		"inv_grid":
+			return windows.character.grid_bg.get_global_rect() if windows != null and windows.character_open() else Rect2()
+		"inv_figure":
+			return windows.character.figure.get_global_rect() if windows != null and windows.character_open() else Rect2()
+		"inv_exit":
+			return windows.character.exit_button.get_global_rect() if windows != null and windows.character_open() else Rect2()
+		"confirm_cost":
+			return confirm_box.highlight_rect("1 hr") if confirm_box != null and confirm_box.visible else Rect2()
 		"time":
 			return time_box.get_global_rect() if time_box != null else Rect2()
-		"character":
-			return (windows.character.grid_bg as Control).get_global_rect() if windows.character_open() else Rect2()
-		"lock":
-			var dr := _mini_map.door_rect_local("ready_room|airlock")
-			if dr.size.x <= 0.0:
-				return Rect2()
-			return Rect2(dr.position + _mini_map.global_position, dr.size).grow(4.0)
+		"tab_rail":
+			return tab_rail_rect()
+		"log_list":
+			return windows.logw.list_rect() if windows != null and windows.log_open() else Rect2()
+		"log_search":
+			return windows.logw.search_rect() if windows != null and windows.log_open() else Rect2()
+		"log_exit":
+			return windows.logw.exit_rect() if windows != null and windows.log_open() else Rect2()
+		"container_grid":
+			return windows.container.grid_bg.get_global_rect() if windows != null and windows.container_open() else Rect2()
+		"map_drop":
+			return _last_drop_rect()
 	return Rect2()
+
+
+## The newest dropped item's dot + name on the full map (global), Rect2() if none is shown.
+func _last_drop_rect() -> Rect2:
+	if _full_map == null or not _full_map.is_visible_in_tree():
+		return Rect2()
+	var list := dropped_in(str(vessel_map.get("current", "")))
+	if list.is_empty():
+		return Rect2()
+	var mk := "drop:%s" % str((list.back() as Dictionary).get("uid", ""))
+	if _full_map.find_marker(mk).is_empty():
+		mk = "pile:%s" % str(vessel_map.get("current", ""))
+	var r := _full_map.marker_hit_rect(mk)
+	if r.size == Vector2.ZERO:
+		return Rect2()
+	return Rect2(r.position + _full_map.global_position, r.size)
+
+
+## The looping hint animation of a tip: {from, to, item, label} in global coordinates.
+func _guide_anim(kind: String) -> Dictionary:
+	if windows == null:
+		return {}
+	var vp := get_viewport_rect().size
+	match kind:
+		"container_to_inventory":
+			if not windows.container_open() or not windows.character_open():
+				return {}
+			var it_id := ""
+			for it: Dictionary in windows.container.items:
+				if not bool(it.get("taken", false)):
+					it_id = str(it.get("id", ""))
+					break
+			return {"from": windows.container.grid_bg.get_global_rect().get_center(),
+				"to": windows.character.grid_bg.get_global_rect().get_center(), "item": it_id, "label": ""}
+		"inventory_to_screen":
+			# where the character screen sits when it is open alone -> out into the room
+			var cs: Vector2 = windows.character.panel_size
+			var c := Vector2(vp.x * 0.5, vp.y * 0.5)
+			var list := dropped_in(str(vessel_map.get("current", "")))
+			var it_id := str((list.back() as Dictionary).get("id", "")) if not list.is_empty() else ""
+			var lbl := str((list.back() as Dictionary).get("label", "")) if not list.is_empty() else ""
+			var frame := Rect2(c - Vector2(cs.x * 0.75, cs.y * 0.4), Vector2(cs.x * 0.8, cs.y * 0.8))
+			return {"frame": frame, "from": frame.get_center(), "to": c + Vector2(cs.x * 0.7, -30.0), "item": it_id,
+				"label": ("DROP " + lbl) if lbl != "" else ""}
+	return {}
 
 
 # ---------------------------------------------------------------- map walkthrough
@@ -768,6 +1037,18 @@ func _tour_next() -> void:
 
 
 func _tour_after_tips() -> void:
+	flags["tut_map_done"] = true      # the map tips were seen (filed in the LOG: Map, Doors, Moving Rooms)
+	flags["tut_move_done"] = true
+	if onboarding_active() and not has_flag("tut_menu_done") and guide_phase == "":
+		# the map minimizes but the walkthrough goes on: the MAP button in the MENU
+		onboard_phase = "menu"
+		tour_phase = ""
+		if tour:
+			tour.hide()
+		map_lock_open(false)
+		close_map()
+		maybe_start_tutorial("menu")
+		return
 	var end: Dictionary = current_screen().get("end", {})
 	if str(end.get("move_to", "")) != "":
 		dev_push_screen("%s/move" % screen_label(screen_index), _reenter_tour.bind(screen_index, -1))
@@ -796,6 +1077,7 @@ func _tour_begin_move() -> void:
 
 func _on_map_moved(room_id: String) -> void:
 	if tour_phase != "move":
+		_enter_room_screen(room_id)
 		return
 	var end: Dictionary = current_screen().get("end", {})
 	if room_id != str(end.get("move_to", "")):
@@ -816,8 +1098,42 @@ func _on_map_moved(room_id: String) -> void:
 	await get_tree().create_timer(wait).timeout
 	if token != _tour_token or not is_inside_tree() or tour_phase != "arrived":
 		return
+	room_transition(_arrive_now.bind(str(end.get("goto", "next"))), "")    # the walk already played its door sound
+
+
+## Room moves outside the walkthrough (READY ROOM <-> STASIS-3): the screen of this scene that puts
+## the player in that room (its on_enter has "map_set_room:<room>") opens. Same scene, so every bit
+## of state (dropped items, locker, coffee, tutorials, hours) stays as it was.
+func room_screen_index(room_id: String) -> int:
+	for i in screens.size():
+		var scr: Dictionary = screens[i]
+		var end: Dictionary = scr.get("end", {})
+		if str(end.get("type", "")) != "hold":
+			continue
+		if ("map_set_room:" + room_id) in (scr.get("on_enter", []) as Array):
+			return i
+	return -1
+
+
+func _enter_room_screen(room_id: String) -> void:
+	var i := room_screen_index(room_id)
+	if i < 0 or i == screen_index:
+		return
+	if map_overlay.visible and not map_locked_open:
+		map_overlay.hide()
+	room_transition(_enter_room_now.bind(i), "")   # the move already played its door sound (map_try_move)
+
+
+func _enter_room_now(i: int) -> void:
+	var prev := _prev_index
+	_skip_record = true      # walking between rooms is not a dev-history step (dev back skips it)
+	enter_screen(i)
+	_prev_index = prev
+
+
+func _arrive_now(goto_target: String) -> void:
 	_tour_close()
-	go(str(end.get("goto", "next")))
+	go(goto_target)
 
 
 func _tour_close() -> void:

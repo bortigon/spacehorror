@@ -1,9 +1,14 @@
 extends Control
 ## One inventory grid cell, drawn in code (placeholder art until the 2D icons exist).
-## Click = `pressed(self)`. A slot that holds an item can be dragged (container -> character screen);
-## a slot with `drop_target` set forwards drops to the owner.
+## Click = `pressed(self)`. A slot that holds an item can be dragged (`drag_started`): the window
+## manager then keeps the item on the cursor (character <-> container, out to the map, onto a lock).
 
 signal pressed(slot: Control)
+## The item was pressed and dragged a few pixels: the window manager makes it stick to the cursor.
+signal drag_started(slot: Control, global_pos: Vector2)
+
+const DRAG_THRESHOLD := 5.0
+const Icons := preload("res://ui/item_icons.gd")
 
 const MONO := "res://assets/fonts/IBMPlexMono-Regular.ttf"
 const MONO_BOLD := "res://assets/fonts/IBMPlexMono-SemiBold.ttf"
@@ -20,9 +25,8 @@ var item: Dictionary = {}
 var dim := false          # "Not issued." placeholder: outline only, faded label
 var selected := false
 var draggable := false
-var drag_kind := ""       # payload "kind" for drag data
-var drag_tag := ""        # payload "tag" (e.g. the container act id)
-var drop_target: Object   # owner with can_drop(data) -> bool and drop(data)
+var _pressing := false
+var _press_pos := Vector2.ZERO
 var _hover := false
 var _font: Font
 var _font_b: Font
@@ -76,7 +80,10 @@ func _draw() -> void:
 	var icon_room := size.y - 5.0 - float(lines.size()) * line_h - 2.0
 	var sq := clampf(minf(size.x - 14.0, icon_room), 8.0, 30.0)
 	var box := Rect2(Vector2((size.x - sq) * 0.5, 3.0 + maxf(0.0, (icon_room - sq) * 0.5)), Vector2(sq, sq))
-	if dim:
+	var iid := str(item.get("icon", item.get("id", "")))   # floor cells carry the real id in "icon"
+	if Icons.has_icon(iid):
+		Icons.draw_icon(self, iid, box.grow(2.0), fade)    # code-drawn art (THERMOS, SUIT, LANTERN, keycards)
+	elif dim:
 		draw_rect(box, Color(ITEM_EDGE, 0.35), false, 1.0)
 	else:
 		draw_rect(box, ITEM_FILL)
@@ -121,34 +128,25 @@ func _fit_label(text: String, w: float) -> Dictionary:
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
-		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT and not item.is_empty():
-			pressed.emit(self)
+		if mb.button_index == MOUSE_BUTTON_LEFT:
+			if mb.pressed and not item.is_empty():
+				_pressing = draggable
+				_press_pos = mb.global_position
+				pressed.emit(self)
+				accept_event()
+			elif not mb.pressed:
+				_pressing = false
+	elif event is InputEventMouseMotion and _pressing:
+		var mm := event as InputEventMouseMotion
+		if (mm.global_position - _press_pos).length() >= DRAG_THRESHOLD and not item.is_empty():
+			_pressing = false
+			drag_started.emit(self, mm.global_position)
 			accept_event()
 
 
-func _get_drag_data(_at: Vector2) -> Variant:
-	if not draggable or item.is_empty():
-		return null
-	var pv := Label.new()
-	pv.text = " %s " % str(item.get("label", ""))
-	pv.add_theme_color_override("font_color", Color(0.03, 0.13, 0.05))
-	var bg := StyleBoxFlat.new()
-	bg.bg_color = ITEM_FILL
-	bg.border_color = ITEM_EDGE
-	bg.set_border_width_all(1)
-	pv.add_theme_stylebox_override("normal", bg)
-	if is_inside_tree() and get_viewport().gui_is_dragging():
-		set_drag_preview(pv)
-	else:
-		pv.free()
-	pressed.emit(self)
-	return {"kind": drag_kind, "tag": drag_tag, "id": str(item.get("id", ""))}
-
-
-func _can_drop_data(_at: Vector2, data: Variant) -> bool:
-	return drop_target != null and drop_target.has_method("can_drop") and bool(drop_target.call("can_drop", data))
-
-
-func _drop_data(_at: Vector2, data: Variant) -> void:
-	if drop_target != null and drop_target.has_method("drop"):
-		drop_target.call("drop", data)
+## A drag begins (button held and moved a few pixels). The window manager takes the item over: it
+## sticks to the cursor (see window_manager.gd), so this is not Godot's built-in drag and drop.
+func start_drag_now(global_pos: Vector2) -> void:
+	if draggable and not item.is_empty():
+		_pressing = false
+		drag_started.emit(self, global_pos)

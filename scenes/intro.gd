@@ -173,7 +173,7 @@ func _setup_story() -> void:
 	vars["tug"] = HOME_SHIP
 	set_tab_locked(Tab.DECK, true)
 	start_passage = &"thaw"
-	ensure_vessel_map()  # REC-7 vessel schematic (data/vessel.gd); you wake in STASIS-15
+	ensure_vessel_map()  # REC-7 vessel schematic (data/vessel.gd); you wake in STASIS-3
 	_setup_intro_hud()   # read-only minimap + O2 bar on the THAW / EXAM overlay
 
 	dossiers = {
@@ -211,21 +211,21 @@ func _setup_story() -> void:
 		&"thaw": {
 			"title": "STASIS THAW",
 			"os_line": "OPERATOR: UNASSIGNED",
-			"map_room": "stasis_15",
+			"map_room": "stasis_3",
 			"no_history": true,   # the THAW overlay records its own screens
 			"on_enter": ["thaw_start"],
 		},
 		&"exam": {
 			"title": "MEMORY EXAMINATION",
 			"os_line": "OPERATOR: UNASSIGNED",
-			"map_room": "stasis_15",
+			"map_room": "stasis_3",
 			"no_history": true,
 			"on_enter": ["exam_start"],
 		},
 		&"home_bunk": {
 			"title": "BUNK",
 			"os_line": "{v:callsign} // ASPECT: HOME",
-			"map_room": "stasis_15",
+			"map_room": "stasis_3",
 			"comms": [
 				"MORNING, {v:callsign}. CONTACT HOLDING.",
 				"{flag:!asked_any?ASK ME NOW. IT GETS BUSY LATER.|}",
@@ -1146,7 +1146,7 @@ func _exam_play_no(k: int, complete := false) -> void:
 
 
 func _exam_lock_doors() -> void:
-	run_op("map_lock_door:stasis_15|ready_room")
+	run_op("map_lock_door:stasis_3|ready_room")
 	flags["stasis_sealed"] = true
 	_exam_door_sfx("res://assets/sounds/airlockdoor.mp3", sfx_close, 0.5)
 
@@ -1162,7 +1162,7 @@ func _exam_door_sfx(path: String, fallback: AudioStreamPlayer, pitch: float) -> 
 
 func _exam_unlock_doors() -> void:
 	if has_flag("stasis_sealed"):
-		run_op("map_unlock_door:stasis_15|ready_room")
+		run_op("map_unlock_door:stasis_3|ready_room")
 		flags.erase("stasis_sealed")
 
 

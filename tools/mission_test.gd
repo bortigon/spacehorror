@@ -54,7 +54,7 @@ func _run() -> void:
 	check("labels are the outline screens then BACK", m.labels() == want and want.size() >= 3)
 	var joined := ", ".join(m.labels())
 	check("sample_scene is not listed", not joined.contains("SAMPLE") and not joined.contains("sample"))
-	check("menu is INTRO and READY ROOM only", want == PackedStringArray(["INTRO", "READY ROOM", "BACK"]))
+	check("menu is INTRO, READY ROOM and AIR LOCK", want == PackedStringArray(["INTRO", "READY ROOM", "AIR LOCK", "BACK"]))
 	check("no per-subscene buttons", not joined.contains("THAW") and not joined.contains("BRIEF") and not joined.contains("MAP"))
 
 	var screen: ColorRect = m.get_node("Screen")

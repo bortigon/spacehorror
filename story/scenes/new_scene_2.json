@@ -1,7 +1,7 @@
 {
   "format": 1,
   "id": "new_scene_2",
-  "title": "NEW SCENE",
+  "title": "READY ROOM",
   "speed": 40,
   "background": "",
   "background_alpha": 0.12,
@@ -14,7 +14,7 @@
     {
       "id": "ready_room",
       "heading": "READY ROOM",
-      "text": "[expo]You step into the ready room. There are several benches running along lockers that line the walls. [/expo]\n\nThe [act=locker]LOCKER[/act] is in front of you. A [act=coffee]COFFEE POT[/act] sits on the counter beside it.\nEight hours on the bar. Everything you do here costs hours, and they do not come back.\nTwo doors lead out. Both consoles glow orange.\n",
+      "text": "The Ready Room is dimly lit from a row of lights around the edges of the ceiling. A large [act=window]WINDOW[/act] dominates the north side of the room. A ship looms in empty space outside, still and silent.\n\nA row of four [act=locker]LOCKERS[/act] line the wall. You can't seem to remember which one is yours.\n\nA set of cabinets in the corner hosts what you recognize as a [act=coffee]COFFEE POT[/act]. Metal cups hang from hooks along the wall behind it.",
       "speed": 0,
       "shake": 0,
       "red": {
@@ -39,7 +39,7 @@
         "locker": {
           "container": true,
           "title": "LOCKER",
-          "text": "The locker is in front of you.\nThe suit is the sensible thing to take. The lantern is light.\nA keycard hangs on a hook inside.",
+          "text": "The locker is in front of you.\n\nThe suit is the sensible thing to take. The lantern is light.\n\nA keycard hangs on a hook inside.",
           "grid": {
             "cols": 3,
             "rows": 3
@@ -48,9 +48,9 @@
             {
               "id": "suit",
               "label": "SUIT",
-              "hours": 1,
+              "hours": 0,
               "required": false,
-              "detail": "Pressure suit. Putting it on takes 1 hr.",
+              "detail": "Pressure suit. Put it on before you go outside.",
               "actions": [
                 "take"
               ]
@@ -58,7 +58,7 @@
             {
               "id": "lantern",
               "label": "LANTERN",
-              "hours": 1,
+              "hours": 0,
               "required": false,
               "detail": "Light.",
               "actions": [
@@ -68,7 +68,7 @@
             {
               "id": "airlock_keycard",
               "label": "AIRLOCK KEYCARD",
-              "hours": 1,
+              "hours": 0,
               "required": false,
               "detail": "Opens the airlock door.",
               "actions": [
@@ -85,29 +85,86 @@
               0.24,
               0.17
             ]
+          },
+          "search": {
+            "hours": 1,
+            "text": "Searching the locker will take 1 hr. Are you sure?"
           }
         },
         "coffee": {
           "station": "coffee",
           "title": "COFFEE POT",
-          "text": "A coffee pot sits on the counter beside the locker.",
+          "text": "The coffee pot is empty and cold. Surely there are supplies in the cabinets above. Maybe you could even find a thermos. Do you want to brew coffee?",
           "marker": {
             "room": "ready_room",
             "label": "COFFEE POT",
             "rect": [
-              0.63,
+              0.65,
               0.05,
-              0.34,
+              0.32,
               0.17
             ]
+          }
+        },
+        "window": {
+          "text": "You step over to the window and look outside. Space has never seemed so--dark. Twinkling pinpricks of light shine from distant stars, but they are few and far between. Blue and purple wisps of a nearby nebulae streak one corner of the view.\n\nThe ship dominates the center, lit by spotlights from the [act=abeyance]RSV ABEYANCE[/act]. It sits motionless in the gloom, like a the corpse of a hulking giant. A chill creeps down your spine. What horrors await?",
+          "choices": [],
+          "marker": {
+            "room": "ready_room",
+            "label": "WINDOW",
+            "rect": [
+              0.33,
+              0.05,
+              0.29,
+              0.17
+            ]
+          }
+        },
+        "abeyance": {
+          "text": "RSV ABEYANCE - The RSV ABEYANCE is small Rec-7 vessel designed for deep space travel. Crewed by four Rec-7 OPERATORS, the ship has cryopod stasis chambers for each one. Crewmates rarely see each other, if ever, as only one crewman is needed per excursion. The ABEYANCE is piloted and operated by AI. Crew may be in stasis for months or years at a time, only to be waked when the ship reaches a mission destination.",
+          "choices": [],
+          "log": {
+            "id": "abeyance",
+            "title": "RSV ABEYANCE",
+            "filed": "SHIP LOG",
+            "category": "SHIP"
           }
         }
       },
       "on_enter": [
         "map_set_room:ready_room",
-        "arm_hours"
-      ],
-      "tutorial": "items"
+        "arm_hours",
+        "map_moves:on"
+      ]
+    },
+    {
+      "id": "stasis",
+      "heading": "STASIS-3",
+      "text": "STASIS-3 is quiet. Your cryopod stands open and empty, its lid raised, frost still melting on the glass.\n\nThere is nothing more for you here.",
+      "speed": 0,
+      "shake": 0,
+      "red": {
+        "mode": "off",
+        "from": 0.0,
+        "to": 0.0
+      },
+      "vo": {
+        "clip": "",
+        "from": 0.0,
+        "to": -1.0,
+        "cues": []
+      },
+      "sfx": [],
+      "question": "",
+      "end": {
+        "type": "hold",
+        "goto": "",
+        "exit": "room:ready_room"
+      },
+      "on_enter": [
+        "map_set_room:stasis_3",
+        "map_moves:on"
+      ]
     }
   ]
 }

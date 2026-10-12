@@ -1,0 +1,43 @@
+{
+  "format": 1,
+  "id": "airlock",
+  "title": "EXCURSION 1",
+  "speed": 40,
+  "background": "",
+  "background_alpha": 0.12,
+  "ambience": "",
+  "show_hud": true,
+  "ui": "game",
+  "fade_in": 0.7,
+  "after": "order:next",
+  "screens": [
+    {
+      "id": "airlock",
+      "heading": "AIR LOCK",
+      "text": "YOU ARE IN THE AIRLOCK",
+      "speed": 0,
+      "shake": 0,
+      "red": {
+        "mode": "off",
+        "from": 0.0,
+        "to": 0.0
+      },
+      "vo": {
+        "clip": "",
+        "from": 0.0,
+        "to": -1.0,
+        "cues": []
+      },
+      "sfx": [],
+      "question": "",
+      "end": {
+        "type": "hold",
+        "goto": "order:next"
+      },
+      "on_enter": [
+        "map_set_room:airlock",
+        "arm_hours"
+      ]
+    }
+  ]
+}

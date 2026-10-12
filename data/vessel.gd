@@ -41,16 +41,16 @@ static func default_map() -> Dictionary:
 	return {
 		"title": VESSEL_TITLE,
 		"subtitle": "REC-7 STASIS VESSEL // DECK SCHEMATIC",
-		"current": "stasis_15",
+		"current": "stasis_3",
 		"rooms": {
 			# Bright green trapezoid at the bottom of the mockup. Starting room.
-			"stasis_15": {
-				"label": "STASIS-15",
+			"stasis_3": {
+				"label": "STASIS-3",
 				"poly": [Vector2(73, 197), Vector2(176, 197), Vector2(160, 232), Vector2(89, 232)],
 				"state": "explored",
 			},
 			# Big pale-green room above stasis (the mockup labelled it COMMISSARY; David: it is the
-			# READY ROOM). One click from STASIS-15 through the open door. EXCURSION 1 PREP makes
+			# READY ROOM). One click from STASIS-3 through the open door. EXCURSION 1 PREP makes
 			# its name known (map_know_room) before you have been there.
 			"ready_room": {
 				"label": "READY ROOM",
@@ -86,8 +86,8 @@ static func default_map() -> Dictionary:
 			},
 		},
 		"doors": [
-			# Open doorway drawn at the top of STASIS-15 in the mockup.
-			{"a": "stasis_15", "b": "ready_room", "pos": Vector2(121, 195.5), "axis": "h", "state": "open"},
+			# Open doorway drawn at the top of STASIS-3 in the mockup.
+			{"a": "stasis_3", "b": "ready_room", "pos": Vector2(121, 195.5), "axis": "h", "state": "open"},
 			# Doorways on the ready room's left and right walls, padlocked as in the mockup
 			# (KEYCARD REQUIRED): port side = AIRLOCK, starboard side = STBD HOLD (RESTRICTED).
 			{"a": "ready_room", "b": "airlock", "pos": Vector2(43.5, 150), "axis": "v", "state": "locked",

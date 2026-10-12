@@ -691,9 +691,9 @@ func test_panel() -> void:
 			and int(panel.act_cols_spin.value) == 3 and int(panel.act_rows_spin.value) == 3 and not panel.act_back_note.visible
 			and panel.act_add_button.text == "Add item")
 		var item_row: Node = panel.act_box.get_child(0)
-		check("panel: item row has id, label, hours, Required, detail",
+		check("panel: item row has id, label, hours (0: taking is free), Required, detail",
 			item_row.find_child("ItemId", true, false) != null and (item_row.find_child("ItemLabel", true, false) as LineEdit).text == "SUIT"
-			and int((item_row.find_child("ItemHours", true, false) as SpinBox).value) == 1
+			and int((item_row.find_child("ItemHours", true, false) as SpinBox).value) == 0
 			and not (item_row.find_child("ItemRequired", true, false) as CheckBox).button_pressed
 			and (item_row.find_child("ItemDetail", true, false) as LineEdit).text.begins_with("Pressure suit."))
 		(item_row.find_child("ItemDetail", true, false) as LineEdit).text_changed.emit("Needed to go outside.")
@@ -729,7 +729,7 @@ func test_panel() -> void:
 		actions.pop_back()
 		panel._rebuild_act_editor()
 		check("panel: saved JSON keeps the container shape", SceneData.to_json(panel.data).contains("\"container\": true")
-			and SceneData.to_json(panel.data).contains("\"items\"") and not SceneData.to_json(panel.data).contains("\"choices\""))
+			and SceneData.to_json(panel.data).contains("\"items\"") and not JSON.stringify(panel.data["screens"][2]["acts"]["locker"]).contains("\"choices\""))
 		# a plain function act on another screen: Back note + Add option, then convert to a container and back
 		panel.select_screen(0)
 		await frames(1)

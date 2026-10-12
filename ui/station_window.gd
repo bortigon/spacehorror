@@ -2,7 +2,7 @@ extends "res://ui/holo_window.gd"
 ## STATION WINDOW: a hologram window for a thing in the room that has a picture and a few options,
 ## not an item grid (the COFFEE POT in the ready room). Same look, same turn-on / turn-off as the
 ## container window. The owner supplies a `provider` Callable returning the current state:
-##   {"text": "description / status", "options": [{"id": "brew", "label": "Brew a Pot (1 hr)"}],
+##   {"text": "description / status", "options": [{"id": "brew", "label": "Brew coffee (1 hr)"}],
 ##    "pot": "empty" | "full", "disabled": false}
 ## and handles `option_pressed(station_id, option_id)`; call refresh() after the state changes.
 ## An act in a scene is `{"station": "coffee", "title": "COFFEE POT", "text": "..."}`; the options are
@@ -25,7 +25,7 @@ var _anim := 0.0
 
 
 func _init() -> void:
-	panel_size = Vector2(300, 292)
+	panel_size = Vector2(300, 318)
 	build()
 
 
@@ -42,21 +42,22 @@ func _build_body() -> void:
 	body.add_child(picture)
 	text_label = make_label("", 10, false)
 	text_label.position = Vector2(12, 178)
-	text_label.size = Vector2(panel_size.x - 24.0, 44)
+	text_label.size = Vector2(panel_size.x - 24.0, 70)
+	text_label.add_theme_constant_override("line_spacing", -3)
 	text_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	text_label.clip_text = true
 	body.add_child(text_label)
-	make_notice(Rect2(12, 224, panel_size.x - 24.0, 14))
+	make_notice(Rect2(12, 250, panel_size.x - 24.0, 14))
 	actions_row = HBoxContainer.new()
 	actions_row.name = "Actions"
-	actions_row.position = Vector2(12, 250)
+	actions_row.position = Vector2(12, 276)
 	actions_row.size = Vector2(panel_size.x - 120.0, 32)
 	actions_row.add_theme_constant_override("separation", 6)
 	actions_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	body.add_child(actions_row)
 	exit_button = make_button("EXIT", Vector2(84, 30))
 	exit_button.name = "Exit"
-	exit_button.position = Vector2(panel_size.x - 94.0, 250)
+	exit_button.position = Vector2(panel_size.x - 94.0, 276)
 	exit_button.size = Vector2(84, 30)
 	exit_button.pressed.connect(func() -> void:
 		if is_interactive():

@@ -135,8 +135,8 @@ func _run() -> void:
 	check("voice on Voice bus", pda.voice_main.bus == &"Voice")
 	await key(KEY_M)
 	check("M ignored during thaw", not pda.map_overlay.visible)
-	check("thaw: HUD minimap visible, STASIS-15 current", pda.hud_map.is_visible_in_tree()
-		and str(pda.hud_map.map_data.get("current", "")) == "stasis_15")
+	check("thaw: HUD minimap visible, STASIS-3 current", pda.hud_map.is_visible_in_tree()
+		and str(pda.hud_map.map_data.get("current", "")) == "stasis_3")
 	check("thaw: HUD O2 100%", is_equal_approx(pda.hud_o2.level, 100.0) and pda.hud_o2.danger == 0.0)
 	check("ambience on Music bus", pda.ambience.bus == &"Music")
 	no_hints("THAW main")
@@ -326,7 +326,7 @@ func _run() -> void:
 	check("exam: NO4 again -> QTE", pda._thaw_phase == pda.ThawPhase.EXAM_DEATH and int(pda.vars["exam_no_count"]) == 4)
 	await process_frame
 	check("exam: old centred O2 box gone", not pda.has_node("%ExamDeathBox"))
-	check("exam: STASIS-15 door locked (map + HUD minimap)", pda.vessel_map["doors"][0]["state"] == "locked"
+	check("exam: STASIS-3 door locked (map + HUD minimap)", pda.vessel_map["doors"][0]["state"] == "locked"
 		and pda.hud_map.map_data["doors"][0]["state"] == "locked")
 	check("exam: HUD minimap ignores mouse", pda.hud_map.mouse_filter == Control.MOUSE_FILTER_IGNORE
 		and pda.hud_map_frame.mouse_filter == Control.MOUSE_FILTER_IGNORE)
@@ -381,8 +381,8 @@ func _run() -> void:
 		and pda.find_child("RailHint", true, false) == null)
 	check("runner: no pin on arrival", not pda.story_text.text.contains("> "))
 	# --- vessel map ---
-	check("map: current room stasis_15", str(pda.vessel_map.get("current", "")) == "stasis_15")
-	check("map: stasis explored", pda.vessel_map["rooms"]["stasis_15"]["state"] == "explored")
+	check("map: current room stasis_3", str(pda.vessel_map.get("current", "")) == "stasis_3")
+	check("map: stasis explored", pda.vessel_map["rooms"]["stasis_3"]["state"] == "explored")
 	check("map: ready room unexplored", pda.vessel_map["rooms"]["ready_room"]["state"] == "unexplored")
 	check("minimap visible", pda.mini_map_frame.is_visible_in_tree())
 	await key(KEY_M)
@@ -424,7 +424,7 @@ func _run() -> void:
 		and pda.map_move_refusal("airlock") == pda.MAP_MSG_RESTRICTED and pda._full_map.room_restricted("airlock"))
 	pda.run_op("map_unrestrict_room:airlock")
 	check("op map_unrestrict_room", not pda.map_room_restricted("airlock") and pda.map_move_refusal("airlock") == pda.MAP_MSG_KEYCARD)
-	pda.run_op("map_set_room:stasis_15")
+	pda.run_op("map_set_room:stasis_3")
 	# Minimap collapses when many choices need the ACTIONS column, then comes back.
 	var many: Array = []
 	for i in 8:

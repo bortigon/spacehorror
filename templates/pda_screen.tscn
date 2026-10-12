@@ -584,23 +584,28 @@ layout_mode = 2
 theme_type_variation = &"OsLabelDim"
 text = "DECK SCHEMATIC"
 
-[node name="MapCloseButton" type="Button" parent="MapOverlay/MapPage/MapBox/MapHeaderRow"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(120, 32)
-layout_mode = 2
-text = "Close"
-
 [node name="MapHost" type="Control" parent="MapOverlay/MapPage/MapBox"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
 mouse_filter = 2
 
-[node name="MapInfo" type="Label" parent="MapOverlay/MapPage/MapBox"]
+[node name="MapFooterRow" type="HBoxContainer" parent="MapOverlay/MapPage/MapBox"]
+layout_mode = 2
+
+[node name="MapInfo" type="Label" parent="MapOverlay/MapPage/MapBox/MapFooterRow"]
 unique_name_in_owner = true
 layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
 theme_type_variation = &"OsLabel"
 text = "LOCATION: -"
+
+[node name="MapCloseButton" type="Button" parent="MapOverlay/MapPage/MapBox/MapFooterRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 32)
+layout_mode = 2
+text = "EXIT"
 
 [node name="PauseMenu" type="Control" parent="."]
 unique_name_in_owner = true

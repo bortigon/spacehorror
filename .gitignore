@@ -8,10 +8,3 @@ export.cfg
 *.log
 .DS_Store
 Thumbs.db
-.mono/
-data_*/
-*.exe
-*.zip
-*.pck
-builds/
-space-horror-pc-builds/

@@ -9,6 +9,8 @@ signal close_requested
 signal item_selected(item: Dictionary)
 ## A button under the grid: "drop" or "wear" (after the Put on? prompt was confirmed).
 signal item_action(action: String, item: Dictionary)
+## An item was pressed and dragged: ("character", slot, global mouse position). See window_manager.gd.
+signal item_drag_started(source: String, slot: Control, global_pos: Vector2)
 
 const COLS := 3
 const ROWS := 5
@@ -31,25 +33,21 @@ var slots: Array = []            # InvSlot controls, row-major
 var desc_title: Label
 var desc_body: Label
 var actions_row: HBoxContainer
+var exit_button: Button
 var action_buttons: Array[Button] = []
 var selected_id := ""
 var suit_worn := false
-var confirm_text := ""           # "Put on? (1 hr)" while the prompt is up, else ""
-## Owner hooks for drag-and-drop from a container: Callable(data) -> bool / Callable(data).
-var can_drop_cb: Callable
-var drop_cb: Callable
+var confirm_text := ""           # "Put on?" while the prompt is up, else ""
 
 
 func _init() -> void:
-	panel_size = Vector2(330, 384)
+	panel_size = Vector2(330, 398)
 	build()
 
 
 func _build_body() -> void:
 	var bg := make_panel_bg()
-	bg.mouse_filter = Control.MOUSE_FILTER_STOP   # a container item can be dropped anywhere on the screen
-	bg.set_drag_forwarding(Callable(), func(_at: Vector2, d: Variant) -> bool: return can_drop(d),
-		func(_at: Vector2, d: Variant) -> void: drop(d))
+	bg.mouse_filter = Control.MOUSE_FILTER_STOP   # a click on the panel never reaches the story
 	body.add_child(bg)
 	name_label = make_label("NAME", 17, true)
 	name_label.position = Vector2(12, 8)
@@ -65,6 +63,7 @@ func _build_body() -> void:
 		if is_interactive():
 			close_requested.emit())
 	body.add_child(close_button)
+	close_button.visible = false      # no X: EXIT bottom right closes the screen (David, round 7)
 
 	figure = Control.new()
 	figure.name = "Figure"
@@ -92,12 +91,11 @@ func _build_body() -> void:
 		s.position = grid_bg.position + Vector2(GRID_PAD + float(i % COLS) * (CELL_W + CELL_GAP),
 			GRID_PAD + float(i / COLS) * (CELL_H + CELL_GAP))
 		s.size = Vector2(CELL_W, CELL_H)
-		s.drop_target = self
+		s.draggable = true
 		s.pressed.connect(_on_slot_pressed)
+		s.drag_started.connect(func(sl: Control, pos: Vector2) -> void: item_drag_started.emit("character", sl, pos))
 		body.add_child(s)
 		slots.append(s)
-	grid_bg.set_drag_forwarding(Callable(), func(_at: Vector2, d: Variant) -> bool: return can_drop(d),
-		func(_at: Vector2, d: Variant) -> void: drop(d))
 
 	var tx := grid_bg.position.x
 	var tw := gw
@@ -109,7 +107,7 @@ func _build_body() -> void:
 	body.add_child(desc_title)
 	desc_body = make_label("", 9, false, INK_DIM)
 	desc_body.position = Vector2(tx, desc_title.position.y + 15.0)
-	desc_body.size = Vector2(tw, 34)
+	desc_body.size = Vector2(tw, 41)
 	desc_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	desc_body.clip_text = true
 	body.add_child(desc_body)
@@ -117,10 +115,19 @@ func _build_body() -> void:
 	actions_row = HBoxContainer.new()
 	actions_row.name = "Actions"
 	actions_row.position = Vector2(12, panel_size.y - 34.0)
-	actions_row.size = Vector2(panel_size.x - 24.0, 26)
+	actions_row.size = Vector2(panel_size.x - 24.0 - 96.0, 26)   # EXIT sits at the right end
 	actions_row.add_theme_constant_override("separation", 6)
 	actions_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	body.add_child(actions_row)
+	# EXIT bottom right, like the other windows (the X top right stays too)
+	exit_button = make_button("EXIT", Vector2(84, 28))
+	exit_button.name = "Exit"
+	exit_button.position = Vector2(panel_size.x - 94.0, panel_size.y - 36.0)
+	exit_button.size = Vector2(84, 28)
+	exit_button.pressed.connect(func() -> void:
+		if is_interactive():
+			close_requested.emit())
+	body.add_child(exit_button)
 
 
 func _draw_figure() -> void:
@@ -230,10 +237,12 @@ func _on_slot_pressed(s: Control) -> void:
 func _show_detail(it: Dictionary) -> void:
 	desc_title.text = confirm_text if confirm_text != "" else str(it.get("label", ""))
 	desc_body.text = str(it.get("detail", ""))
-	desc_body.add_theme_font_size_override("font_size", 9)
+	var detail := str(it.get("detail", ""))
+	desc_body.add_theme_font_size_override("font_size", 9 if detail.length() <= 60 else 8)
+	desc_body.add_theme_constant_override("line_spacing", -3)
 
 
-## Buttons for the selected item: "Put on (1 hr)" (wearables) and "Drop"; while the Put on? prompt is
+## Buttons for the selected item: "Put on" (wearables, free), "Drink" (the thermos) and "Drop"; while the Put on? prompt is
 ## up: YES / CANCEL.
 func _refresh_actions() -> void:
 	for b in action_buttons:
@@ -251,8 +260,10 @@ func _refresh_actions() -> void:
 		var aid := str(a)
 		match aid:
 			"wear":
-				var hrs := int(it.get("wear_hours", 1))
+				var hrs := int(it.get("wear_hours", 0))
 				_add_action("wear", "Put on%s" % ((" (%s)" % hour_text(hrs)) if hrs > 0 else ""), _on_action_pressed.bind("wear"))
+			"drink":
+				_add_action("drink", "Drink", _on_action_pressed.bind("drink"))
 			"drop":
 				_add_action("drop", "Drop", _on_action_pressed.bind("drop"))
 
@@ -287,7 +298,7 @@ func _on_action_pressed(aid: String) -> void:
 	if it.is_empty():
 		return
 	if aid == "wear":
-		var hrs := int(it.get("wear_hours", 1))
+		var hrs := int(it.get("wear_hours", 0))
 		confirm_text = "Put on?%s" % ((" (%s)" % hour_text(hrs)) if hrs > 0 else "")
 		_show_detail(it)
 		_refresh_actions()
@@ -304,13 +315,3 @@ func _on_confirm(yes: bool) -> void:
 	_refresh_actions()
 	if yes and not it.is_empty():
 		item_action.emit("wear", it.duplicate(true))
-
-
-# drag-and-drop target (container items dropped on the inventory)
-func can_drop(data: Variant) -> bool:
-	return is_interactive() and can_drop_cb.is_valid() and bool(can_drop_cb.call(data))
-
-
-func drop(data: Variant) -> void:
-	if can_drop(data) and drop_cb.is_valid():
-		drop_cb.call(data)

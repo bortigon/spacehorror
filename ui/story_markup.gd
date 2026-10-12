@@ -11,7 +11,7 @@ extends RefCounted
 ##   [error=DEMON delay=1.5 level=10]voice[/error]
 ##                              "voice" stays readable for 1.5 s, then becomes a hard-to-read DEMON.
 ##   [expo]prose[/expo]         IBM Plex Serif, for room description (not the terminal face).
-##   [act=locker]locker[/act]   clickable. Shown as LOCKER, bold, underline on the letters only.
+##   [act=locker]locker[/act]   clickable. Shown as LOCKER, bold, one underline from the first to the last letter (also across spaces: COFFEE POT).
 ##   [shake]text[/shake]        shaky text (default strength 6). [shake=12]...[/shake] = 1..20.
 ##   [pause=1.0]                typing stops for 1.0 s here ([pause] alone = 0.5 s).
 ##   [b]bold[/b]  [i]italic[/i]
@@ -194,8 +194,10 @@ func _emit(c: String) -> void:
 	if not _line_started and c.strip_edges() != "":
 		_line_started = true
 		_cue += 1
-	# Spaces stay outside the act style so the underline starts on the first letter.
-	var use_act := "" if (_act != "" and (c == " " or c == "\t")) else _act
+	# Spaces inside an act word keep the act, so COFFEE POT is ONE run with one continuous underline.
+	# A space at the start or end of the run is moved outside by _wrap(), so the underline still
+	# starts on the first letter and stops on the last.
+	var use_act := _act
 	var e := {"c": c, "line": _cue if _line_started else -1,
 		"shake": 0 if _shake.is_empty() else int(_shake.back()),
 		"err": _err, "b": _b > 0, "i": _i > 0, "expo": _expo > 0, "act": use_act, "pause": _pause, "t": 0.0}

@@ -29,9 +29,10 @@ func _run() -> void:
 	var disk := FileAccess.get_file_as_string("res://story/SCENE_ORDER.md")
 	var doc := Order.parse(disk)
 	var chs: Array = doc["chapters"]
-	check("one chapter, PROLOGUE, with its note", chs.size() == 1
+	check("two chapters, PROLOGUE (with its note) then EXCURSION 1", chs.size() == 2
 		and str(chs[0]["title"]) == "PROLOGUE"
-		and str(chs[0]["note"]) == "Still on this ship, before they leave.")
+		and str(chs[0]["note"]) == "Still on this ship, before they leave."
+		and str(chs[1]["title"]) == "EXCURSION 1" and str(chs[1]["scenes"][0]["title"]) == "AIR LOCK")
 	var scenes: Array = chs[0]["scenes"]
 	check("scenes are INTRO then READY ROOM", scenes.size() == 2
 		and str(scenes[0]["title"]) == "INTRO" and str(scenes[1]["title"]) == "READY ROOM")
@@ -54,9 +55,11 @@ func _run() -> void:
 	check("NEXT exam → map", Order.next_after("intro:exam") == "scene:excursion1_prep/map")
 	check("NEXT map → brief", Order.next_after("scene:excursion1_prep/map") == "scene:excursion1_prep/brief")
 	check("NEXT brief → ready_room", Order.next_after("scene:excursion1_prep/brief") == "scene:new_scene_2/ready_room")
-	check("NEXT ready_room is nowhere", Order.next_after("scene:new_scene_2/ready_room") == "")
+	check("NEXT ready_room → the AIR LOCK placeholder", Order.next_after("scene:new_scene_2/ready_room") == "scene:airlock/airlock")
+	check("NEXT air lock is nowhere (yet)", Order.next_after("scene:airlock/airlock") == "")
 	var menu: Array = Order.menu_rows()
-	check("menu buttons are the scenes, opening the first subscene", menu.size() == 2
+	check("menu buttons are the scenes, opening the first subscene", menu.size() == 3
+		and str(menu[2]["label"]) == "AIR LOCK" and str(menu[2]["target"]) == "scene:airlock/airlock"
 		and str(menu[0]["label"]) == "INTRO" and str(menu[0]["target"]) == "intro:thaw"
 		and str(menu[1]["label"]) == "READY ROOM" and str(menu[1]["target"]) == "scene:new_scene_2/ready_room")
 
@@ -71,7 +74,7 @@ func _run() -> void:
 	var added_flat: Array = Order.flat_screens(Order.parse(added))
 	check("adding a chapter is a list edit", added.contains("## CHAPTER 1") and added.contains("### AIRLOCK")
 		and str(added_flat.back()["target"]) == "scene:airlock/arrive"
-		and Order.next_after_in(added_flat, "scene:new_scene_2/ready_room") == "scene:airlock/arrive")
+		and Order.next_after_in(added_flat, "scene:airlock/airlock") == "scene:airlock/arrive")
 	var moved := Order.move_in(disk, "excursion1_prep", "brief", -1)
 	var moved_flat: Array = Order.flat_screens(Order.parse(moved))
 	check("Earlier swaps brief in front of map inside INTRO", str(moved_flat[2]["screen"]) == "brief"
@@ -90,18 +93,20 @@ func _run() -> void:
 	check("ready room is a hold with no CONTINUE (the way on is the airlock door)", str(pda.current_screen().get("id", "")) == "ready_room"
 		and pda.stage.end_type() == "hold" and not pda.stage.continue_button.visible and pda.exit_door_key() == "ready_room|airlock")
 	pda.vars["suit_worn"] = true
+	var trimmed := disk.get_slice("\n## EXCURSION 1", 0) + "\n"    # the outline as if READY ROOM were last
+	Order.override_text = trimmed
 	pda._leave_through_exit()
-	await process_frame
+	await wait_s(1.3)     # the exit fades to black first
 	check("end of the list shows the unwritten screen and stays put", str(current_scene.scene_file_path).ends_with("new_scene_2.tscn")
 		and str(pda.stage.text_label.text).contains("The next scene isn't written."))
 
-	Order.override_text = disk + "- scene:excursion1_prep/ready_room — READY ROOM 2\n"
+	Order.override_text = trimmed + "- scene:excursion1_prep/ready_room — READY ROOM 2\n"
 	pda.enter_screen(0)
 	pda.stage.skip_typing(true)
 	await process_frame
 	pda._leave_through_exit()
 	await process_frame
-	await wait_s(0.4)
+	await wait_s(1.5)
 	check("NEXT opens the following screen", current_scene != null
 		and str(current_scene.scene_file_path).ends_with("excursion1_prep.tscn")
 		and str(current_scene.current_screen().get("id", "")) == "ready_room")
